@@ -1,0 +1,18 @@
+# $Id: Recipe.pm 988 2005-09-23 19:53:40Z btrott $
+
+package Recipe;
+use strict;
+use base qw( Data::ObjectDriver::BaseObject );
+
+use Data::ObjectDriver::Driver::DBI;
+
+__PACKAGE__->install_properties({
+    columns => [ 'id', 'title' ],
+    datasource => 'recipes',
+    primary_key => 'id',
+    driver => Data::ObjectDriver::Driver::DBI->new(
+        dsn      => 'dbi:SQLite:dbname=global.db',
+    ),
+});
+
+1;
