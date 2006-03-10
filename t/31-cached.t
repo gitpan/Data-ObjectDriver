@@ -1,4 +1,4 @@
-# $Id: 31-cached.t 990 2005-09-23 20:13:56Z btrott $
+# $Id: 31-cached.t 1043 2005-11-28 10:04:03Z ykerherve $
 
 use strict;
 
@@ -15,7 +15,7 @@ BEGIN {
         plan skip_all => 'Tests require Cache::Memory';
     }
 }
-plan tests => 52;
+plan tests => 54;
 
 setup_dbs({
     global   => [ qw( recipes ingredients ) ],
@@ -122,9 +122,23 @@ is($all->[0]->name, 'Vanilla Ice Cream', 'lookup_multi results in right order');
 is($all->[1]->name, 'Bananas', 'lookup_multi results in right order');
 is($all->[2]->name, 'Chocolate Chips', 'lookup_multi results in right order');
 
+
+# fetch_data tests
+my $data = $recipe->fetch_data;
+is_deeply 
+    $data, { title => "My Banana Milkshake", id => 1 },
+    "(DBI) fetch_data - recipe not cached";
+
+$data = $ingredient->fetch_data;
+is_deeply $data,
+    { name => "Vanilla Ice Cream", quantity => 1, recipe_id => 1, id => 1 },
+    "(Cache) fetch_data - ingredient is cached";
+
 ok($ingredient->remove, 'Ingredient removed successfully');
 ok($ingredient2->remove, 'Ingredient removed successfully');
 ok($ingredient3->remove, 'Ingredient removed successfully');
+
+
 ok($recipe->remove, 'Recipe removed successfully');
 ok($recipe2->remove, 'Recipe removed successfully');
 

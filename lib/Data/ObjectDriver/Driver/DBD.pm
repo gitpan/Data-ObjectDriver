@@ -1,4 +1,4 @@
-# $Id: DBD.pm 961 2005-08-01 07:33:09Z btrott $
+# $Id: DBD.pm 1062 2005-12-15 12:55:49Z ykerherve $
 
 package Data::ObjectDriver::Driver::DBD;
 use strict;
@@ -6,6 +6,7 @@ use strict;
 sub new {
     my $class = shift;
     my($name) = @_;
+    die "No Driver" unless $name;
     my $subclass = join '::', $class, $name;
     eval "use $subclass";
     die $@ if $@;

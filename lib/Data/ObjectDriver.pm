@@ -1,4 +1,4 @@
-# $Id: ObjectDriver.pm 994 2005-10-11 16:47:48Z btrott $
+# $Id: ObjectDriver.pm 1108 2006-02-20 21:25:45Z btrott $
 
 package Data::ObjectDriver;
 use strict;
@@ -6,7 +6,7 @@ use base qw( Class::Accessor::Fast );
 
 __PACKAGE__->mk_accessors(qw( pk_generator ));
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 our $DEBUG = 0;
 
 use Data::Dumper ();
@@ -53,26 +53,27 @@ Data::ObjectDriver - Simple, transparent data interface, with caching
             dsn      => 'dbi:mysql:dbname',
             username => 'username',
             password => 'password',
+        )
     }
 
     ## Set up the classes for your recipe and ingredient objects.
     package Recipe;
     use base qw( Data::ObjectDriver::BaseObject );
-    __PACKAGE__->install_properties(
+    __PACKAGE__->install_properties({
         columns     => [ 'recipe_id', 'title' ],
         datasource  => 'recipe',
         primary_key => 'recipe_id',
         driver      => FoodDriver->driver,
-    );
+    });
 
     package Ingredient;
     use base qw( Data::ObjectDriver::BaseObject );
-    __PACKAGE__->install_properties(
+    __PACKAGE__->install_properties({
         columns     => [ 'ingredient_id', 'recipe_id', 'name', 'quantity' ],
         datasource  => 'ingredient',
         primary_key => [ 'recipe_id', 'ingredient_id' ],
         driver      => FoodDriver->driver,
-    );
+    });
 
     ## And now, use them!
     my $recipe = Recipe->new;
@@ -309,6 +310,19 @@ Optional; the default is to fetch the values of all of the columns.
 
 =back
 
+=head2 Class->add_trigger($trigger, \&callback)
+
+Adds a trigger to all objects of class I<Class>, such that when the event
+I<$trigger> occurs to any of the objects, subroutine C<&callback> is run. Note
+that triggers will not occur for instances of I<subclasses> of I<Class>, only
+of I<Class> itself. See TRIGGERS for the available triggers.
+
+=head2 Class->call_trigger($trigger, [@callback_params])
+
+Invokes the triggers watching class I<Class>. The parameters to send to the
+callbacks (in addition to I<Class>) are specified in I<@callback_params>. See
+TRIGGERS for the available triggers.
+
 =head2 $obj->save
 
 Saves the object I<$obj> to the database.
@@ -323,7 +337,110 @@ If an error occurs, I<save> will I<croak>.
 
 Removes the object I<$obj> from the database.
 
-If an error occurs, I<save> will I<croak>.
+If an error occurs, I<remove> will I<croak>.
+
+=head2 Class->remove(\%terms, \%args)
+
+Removes objects found with the I<%terms>. So it's a shortcut of:
+
+  my @obj = Class->search(\%terms, \%args);
+  for my $obj (@obj) {
+      $obj->remove;
+  }
+
+However, when you pass C<nofetch> option set to C<%args>, it won't
+create objects with C<search>, but issues I<DELETE> SQL directly to
+the database.
+
+  ## issues "DELETE FROM tbl WHERE user_id = 2"
+  Class->remove({ user_id => 2 }, { nofetch => 1 });
+
+This might be much faster and useful for tables without Primary Key,
+but beware that in this case B<Triggers won't be fired> because no
+objects are instanciated.
+
+=head2 $obj->add_trigger($trigger, \&callback)
+
+Adds a trigger to the object I<$obj>, such that when the event I<$trigger>
+occurs to the object, subroutine C<&callback> is run. See TRIGGERS for the
+available triggers. Triggers are invoked in the order in which they are added.
+
+=head2 $obj->call_trigger($trigger, [@callback_params])
+
+Invokes the triggers watching all objects of I<$obj>'s class and the object
+I<$obj> specifically for trigger event I<$trigger>. The additional parameters
+besides I<$obj>, if any, are passed as I<@callback_params>. See TRIGGERS for
+the available triggers.
+
+=head1 TRIGGERS
+
+I<Data::ObjectDriver> provides a trigger mechanism by which callbacks can be
+called at certain points in the life cycle of an object. These can be set on a
+class as a whole or individual objects (see USAGE).
+
+Triggers can be added and called for these events:
+
+=over 4
+
+=item * pre_save -> ($obj, $orig_obj)
+
+Callbacks on the I<pre_save> trigger are called when the object is about to be
+saved to the database. For example, use this callback to translate special code
+strings into numbers for storage in an integer column in the database. Note that this hook is also called when you C<remove> the object.
+
+Modifications to I<$obj> will affect the values passed to subsequent triggers
+and saved in the database, but not the original object on which the I<save>
+method was invoked.
+
+=item * post_save -> ($obj, $orig_obj)
+
+Callbaks on the I<post_save> triggers are called after the object is
+saved to the database. Use this trigger when your hook needs primary
+key which is automatically assigned (like auto_increment and
+sequence). Note that this hooks is B<NOT> called when you remove the
+object.
+
+=item * pre_insert/post_insert/pre_update/post_update/pre_remove/post_remove -> ($obj, $orig_obj)
+
+Those triggers are fired before and after $obj is created, updated and
+deleted.
+
+=item * post_load -> ($obj)
+
+Callbacks on the I<post_load> trigger are called when an object is being
+created from a database query, such as with the I<lookup> and I<search> class
+methods. For example, use this callback to translate the numbers your
+I<pre_save> callback caused to be saved I<back> into string codes.
+
+Modifications to I<$obj> will affect the object passed to subsequent triggers
+and returned from the loading method.
+
+Note I<pre_load> should only be used as a trigger on a class, as the object to
+which the load is occuring was not previously available for triggers to be
+added.
+
+=item * pre_search -> ($class, $terms, $args)
+
+Callbacks on the I<pre_search> trigger are called when a content addressed
+query for objects of class I<$class> is performed with the I<search> method.
+For example, use this callback to translate the entry in I<$terms> for your
+code string field to its appropriate integer value.
+
+Modifications to I<$terms> and I<$args> will affect the parameters to
+subsequent triggers and what objects are loaded, but not the original hash
+references used in the I<search> query.
+
+Note I<pre_search> should only be used as a trigger on a class, as I<search> is
+never invoked on specific objects.
+
+=over
+
+The return values from your callbacks are ignored.
+
+Note that the invocation of callbacks is the responsibility of the object
+driver. If you implement a driver that does not delegate to
+I<Data::ObjectDriver::Driver::DBI>, it is I<your> responsibility to invoke the
+appropriate callbacks with the I<call_trigger> method.
 
 =head1 EXAMPLES
 
@@ -389,7 +506,7 @@ it under the same terms as Perl itself.
 
 =head1 AUTHOR & COPYRIGHT
 
-Except where otherwise noted, I<Data::ObjectDriver> is Copyright 2005
+Except where otherwise noted, I<Data::ObjectDriver> is Copyright 2005-2006
 Six Apart, cpan@sixapart.com. All rights reserved.
 
 =cut

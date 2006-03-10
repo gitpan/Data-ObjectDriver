@@ -1,4 +1,4 @@
-# $Id: Partition.pm 924 2005-06-22 20:41:59Z btrott $
+# $Id: Partition.pm 1067 2005-12-28 05:05:21Z btrott $
 
 package Data::ObjectDriver::Driver::Partition;
 use strict;
@@ -23,18 +23,19 @@ sub lookup {
 sub lookup_multi {
     my $driver = shift;
     my($class, @ids) = @_;
-    $driver->get_driver->(@ids)->lookup_multi($class, @ids);
+    $driver->get_driver->($ids[0])->lookup_multi($class, @ids);
 }
 
-sub exists { shift->_exec_partitioned('exists', @_) }
-sub insert { shift->_exec_partitioned('insert', @_) }
-sub update { shift->_exec_partitioned('update', @_) }
-sub remove { shift->_exec_partitioned('remove', @_) }
+sub exists     { shift->_exec_partitioned('exists',     @_) }
+sub insert     { shift->_exec_partitioned('insert',     @_) }
+sub update     { shift->_exec_partitioned('update',     @_) }
+sub remove     { shift->_exec_partitioned('remove',     @_) }
+sub fetch_data { shift->_exec_partitioned('fetch_data', @_) }
 
 sub search {
     my $driver = shift;
     my($class, $terms, $args) = @_;
-    $driver->get_driver->($terms)->search($class, $terms, $args);
+    $driver->get_driver->($terms, $args)->search($class, $terms, $args);
 }
 
 sub _exec_partitioned {

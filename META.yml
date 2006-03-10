@@ -1,15 +1,17 @@
-name: Data-ObjectDriver
-version: 0.01
-abstract: 
+abstract: ''
 author: Six Apart <cpan@sixapart.com>
-license: perl
 distribution_type: module
-requires:
-  DBI: 0
-  Class::Accessor::Fast: 0
-  Class::Data::Inheritable: 0
+generated_by: Module::Install version 0.57
+license: perl
+name: Data-ObjectDriver
 no_index:
   directory:
     - t
     - inc
-generated_by: Module::Install version 0.36
+    - t
+requires:
+  Class::Accessor::Fast: 0
+  Class::Data::Inheritable: 0
+  Class::Trigger: 0
+  DBI: 0
+version: 0.02

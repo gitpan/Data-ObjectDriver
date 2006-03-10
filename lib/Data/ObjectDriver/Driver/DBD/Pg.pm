@@ -1,4 +1,4 @@
-# $Id: Pg.pm 964 2005-08-01 08:01:02Z btrott $
+# $Id: Pg.pm 1082 2006-01-10 22:22:10Z mpaschal $
 
 package Data::ObjectDriver::Driver::DBD::Pg;
 use strict;
@@ -22,7 +22,9 @@ sub bind_param_attributes {
 sub sequence_name {
     my $dbd = shift;
     my($class) = @_;
-    join '_', $class->datasource, $class->properties->{primary_key}, 'seq';
+    join '_', $class->datasource,
+        $dbd->db_column_name($class->datasource, $class->properties->{primary_key}),
+        'seq';
 }
 
 sub fetch_id {

@@ -1,4 +1,4 @@
-# $Id: BaseCache.pm 973 2005-08-09 04:21:39Z btrott $
+# $Id: BaseCache.pm 1141 2006-03-10 00:56:54Z btrott $
 
 package Data::ObjectDriver::Driver::BaseCache;
 use strict;
@@ -30,23 +30,72 @@ sub lookup {
     my $obj = $driver->get_from_cache($key);
     unless ($obj) {
         $obj = $driver->fallback->lookup($class, $id);
-        $driver->add_to_cache($key, $obj->clone) if $obj;
+        $driver->add_to_cache($key, $obj->clone_all) if $obj;
     }
     $obj;
+}
+
+sub get_multi_from_cache {
+    my $driver = shift;
+    my(@keys) = @_;
+    ## Use driver->get_from_cache to look up each object in the cache.
+    ## We don't fall back here, because we only want to find items that
+    ## are already cached.
+    my %got;
+    for my $key (@keys) {
+        my $obj = $driver->get_from_cache($key) or next;
+        $got{$key} = $obj;
+    }
+    \%got;
 }
 
 sub lookup_multi {
     my $driver = shift;
     my($class, $ids) = @_;
-    return $driver->fallback->lookup_multi($class, @$ids)
+    return $driver->fallback->lookup_multi($class, $ids)
         if $driver->Disabled;
-    ## Use driver->lookup to look up each object in the cache, and fallback
-    ## to the backend driver if object isn't found in the cache.
-    my @got;
-    for my $id (@$ids) {
-        push @got, $driver->lookup($class, $id);
+
+    my %id2key = map { $_ => $driver->cache_key($class, $_) } @$ids;
+    my $got = $driver->get_multi_from_cache(values %id2key);
+
+    ## If we got back all of the objects from the cache, return immediately.
+    if (scalar keys %$got == @$ids) {
+        return [ map $got->{ $id2key{$_} }, @$ids ];
     }
+
+    ## Otherwise, look through the list of IDs to see what we're missing,
+    ## and fall back to the backend to look up those objects.
+    my($i, @got, @need, %need2got) = (0);
+    for my $id (@$ids) {
+        if (my $obj = $got->{ $id2key{$id} }) {
+            push @got, $obj;
+        } else {
+            push @got, undef;
+            push @need, $id;
+            $need2got{$#need} = $i;
+        }
+        $i++;
+    }
+
+    my $more = $driver->fallback->lookup_multi($class, \@need);
+    $i = 0;
+    for my $obj (@$more) {
+        $got[ $need2got{$i++} ] = $obj;
+        if ($obj) {
+            my $id = $obj->primary_key_tuple;
+            $driver->add_to_cache($driver->cache_key($class, $id),
+                                  $obj->clone_all);
+        }
+    }
+
     \@got;
+}
+
+## We fallback by default
+sub fetch_data { 
+    my $driver = shift;
+    my ($obj) = @_;
+    return $driver->fallback->fetch_data($obj);
 }
 
 sub search {
@@ -55,31 +104,29 @@ sub search {
         if $driver->Disabled;
     my($class, $terms, $args) = @_;
 
+    ## If the caller has asked only for certain columns, assume that
+    ## he knows what he's doing, and fall back to the backend.
+    return $driver->fallback->search(@_)
+        if $args->{fetchonly};
+
     ## Tell the fallback driver to fetch only the primary columns,
     ## then run the search using the fallback.
-    my $pk = $class->properties->{primary_key};
-    my $old = $args->{fetchonly};
-    $args->{fetchonly} = ref $pk eq 'ARRAY' ? $pk : [ $pk ];
-    my $iter = $driver->fallback->search($class, $terms, $args);
+    $args->{fetchonly} = $class->primary_key_tuple; 
+    ## Disable triggers for this load. We don't want the post_load trigger
+    ## being called twice.
+    $args->{no_triggers} = 1;
+    my @objs = $driver->fallback->search($class, $terms, $args);
 
-    ## Create a new iterator that knows how to get an object from
-    ## the backend, then look it up using this driver--that means
-    ## that we'll pull it from the cache if it's already there.
-    my $iter2 = sub {
-        my $obj = $iter->() or return;
-        return $driver->lookup($class, $obj->primary_key);
-    };
+    ## Load all of the objects using a lookup_multi, which is fast from
+    ## cache.
+    my $objs = $driver->lookup_multi($class, [ map $_->primary_key, @objs ]);
 
     ## Now emulate the standard search behavior of returning an
     ## iterator in scalar context, and the full list in list context.
     if (wantarray) {
-        my @objs;
-        while (my $obj = $iter2->()) {
-            push @objs, $obj;
-        }
-        return @objs;
+        return @$objs;
     } else {
-        return $iter2;
+        return sub { shift @$objs };
     }
 }
 
@@ -89,7 +136,7 @@ sub update {
     return $driver->fallback->update($obj)
         if $driver->Disabled;
     my $key = $driver->cache_key(ref($obj), $obj->primary_key);
-    $driver->update_cache($key, $obj->clone);
+    $driver->update_cache($key, $obj->clone_all);
     $driver->fallback->update($obj);
 }
 

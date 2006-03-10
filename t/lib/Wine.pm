@@ -1,4 +1,4 @@
-# $Id: Wine.pm 988 2005-09-23 19:53:40Z btrott $
+# $Id: Wine.pm 1050 2005-12-08 13:46:22Z ykerherve $
 
 use strict;
 
@@ -18,9 +18,11 @@ use base qw( My::BaseObject );
 use Data::ObjectDriver::Driver::DBI;
 
 __PACKAGE__->install_properties({
-    columns => [ 'id', 'cluster_id', 'name' ], # rating is defined on the fly in My::BaseObject 
+    # rating is defined on the fly in My::BaseObject 
+    columns => [ 'id', 'cluster_id', 'name', 'content', 'binchar'],
     datasource => 'wines',
     primary_key => 'id',
+    column_defs => { content => 'blob', binchar => 'binchar' },
     driver => Data::ObjectDriver::Driver::DBI->new(
         dsn      => 'dbi:SQLite:dbname=global.db',
     ),

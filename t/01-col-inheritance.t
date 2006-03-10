@@ -1,4 +1,4 @@
-# $Id: 01-col-inheritance.t 989 2005-09-23 19:58:01Z btrott $
+# $Id: 01-col-inheritance.t 1050 2005-12-08 13:46:22Z ykerherve $
 
 use strict;
 
@@ -10,7 +10,7 @@ use Test::More;
 unless (eval { require DBD::SQLite }) {
     plan skip_all => 'Tests require DBD::SQLite';
 }
-plan tests => 11;
+plan tests => 15;
 
 setup_dbs({
     global => [ qw( wines ) ],
@@ -19,7 +19,7 @@ setup_dbs({
 use Wine;
 
 my $wine = Wine->new;
-my %expected = ( name => 1, rating => 1, id => 1, cluster_id => 1 ); 
+my %expected = map { $_ => 1 } qw(name rating id cluster_id content binchar); 
 my %data;
 # I know about Test::Deep. Do not ask...
 for my $col (@{ $wine->column_names }) {

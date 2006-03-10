@@ -1,4 +1,4 @@
-$Id: README 991 2005-09-23 20:15:56Z btrott $
+$Id: README 1081 2006-01-10 21:54:40Z mpaschal $
 
 This is Data::ObjectDriver, providing a simple and generic abstraction
 to databases (DBI and otherwise), along with support for partitioning and
@@ -9,6 +9,7 @@ PREREQUISITES
     * DBI
     * Class::Accessor::Fast
     * Class::Data::Inheritable
+    * Class::Trigger
 
 INSTALLATION
 
