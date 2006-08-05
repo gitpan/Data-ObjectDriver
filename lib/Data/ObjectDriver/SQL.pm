@@ -1,10 +1,12 @@
-# $Id: SQL.pm 1136 2006-03-03 01:18:23Z miyagawa $
+# $Id: SQL.pm 216 2006-06-07 19:38:15Z btrott $
 
 package Data::ObjectDriver::SQL;
 use strict;
+use warnings;
+
 use base qw( Class::Accessor::Fast );
 
-__PACKAGE__->mk_accessors(qw( select select_map select_map_reverse from join where bind limit offset group order having where_values ));
+__PACKAGE__->mk_accessors(qw( select select_map select_map_reverse from joins where bind limit offset group order having where_values ));
 
 sub new {
     my $class = shift;
@@ -17,6 +19,7 @@ sub new {
     $stmt->where([]);
     $stmt->where_values({});
     $stmt->having([]);
+    $stmt->joins([]);
     $stmt;
 }
 
@@ -26,6 +29,15 @@ sub add_select {
     push @{ $stmt->select }, $term;
     $stmt->select_map->{$term} = $col;
     $stmt->select_map_reverse->{$col} = $term;
+}
+
+sub add_join {
+    my $stmt = shift;
+    my($table, $joins) = @_;
+    push @{ $stmt->joins }, {
+        table => $table,
+        joins => ref($joins) eq 'ARRAY' ? $joins : [ $joins ],
+    };
 }
 
 sub as_sql {
@@ -39,13 +51,17 @@ sub as_sql {
         } @{ $stmt->select }) . "\n";
     }
     $sql .= 'FROM ';
-    if (my $join = $stmt->join) {
-        ## If there's an actual JOIN statement, assume it's for joining with
-        ## the main datasource for the object we're loading. So shift that
-        ## off of the FROM list, and write the JOIN statement and condition.
-        $sql .= shift(@{ $stmt->from }) . ' ' .
-                uc($join->{type}) . ' JOIN ' . $join->{table} . ' ON ' .
-                $join->{condition};
+    ## Add any explicit JOIN statements before the non-joined tables.
+    if ($stmt->joins && @{ $stmt->joins }) {
+        for my $j (@{ $stmt->joins }) {
+            my($table, $joins) = map { $j->{$_} } qw( table joins );
+            $sql .= $table;
+            for my $join (@{ $j->{joins} }) {
+                $sql .= ' ' .
+                        uc($join->{type}) . ' JOIN ' . $join->{table} . ' ON ' .
+                        $join->{condition};
+            }
+        }
         $sql .= ', ' if @{ $stmt->from };
     }
     $sql .= join(', ', @{ $stmt->from }) . "\n";
@@ -66,7 +82,7 @@ sub as_sql {
 sub as_aggregate {
     my $stmt = shift;
     my($set) = @_;
-        
+
     if (my $attribute = $stmt->$set()) {
         my $elements = (ref($attribute) eq 'ARRAY') ? $attribute : [ $attribute ];
         return uc($set) . ' BY '
@@ -118,7 +134,7 @@ sub add_having {
     if (my $orig = $stmt->select_map_reverse->{$col}) {
         $col = $orig;
     }
-    
+
     my($term, $bind) = $stmt->_mk_term($col, $val);
     push @{ $stmt->{having} }, "($term)";
     push @{ $stmt->{bind} }, @$bind;
@@ -130,19 +146,25 @@ sub _mk_term {
     my $term = '';
     my @bind;
     if (ref($val) eq 'ARRAY') {
-        my $logic = 'OR';
-        my @val = @$val;
-        if ($val->[0] eq '-and') {
-            $logic = 'AND';
-            shift @val;
+        if (ref $val->[0] or $val->[0] eq '-and') {
+            my $logic = 'OR';
+            my @values = @$val;
+            if ($val->[0] eq '-and') {
+                $logic = 'AND';
+                shift @values;
+            }
+
+            my @terms;
+            for my $v (@values) {
+                my($term, $bind) = $stmt->_mk_term($col, $v);
+                push @terms, $term;
+                push @bind, @$bind;
+            }
+            $term = join " $logic ", @terms;
+        } else {
+            $term = "$col IN (".join(',', ('?') x scalar @$val).')';
+            @bind = @$val;
         }
-        my @terms;
-        for my $val (@val) {
-            my($term, $bind) = $stmt->_mk_term($col, $val);
-            push @terms, $term;
-            push @bind, @$bind;
-        }
-        $term = join " $logic ", @terms;
     } elsif (ref($val) eq 'HASH') {
         $term = "$col $val->{op} ?";
         push @bind, $val->{value};

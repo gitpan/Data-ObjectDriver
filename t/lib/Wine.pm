@@ -1,4 +1,4 @@
-# $Id: Wine.pm 1050 2005-12-08 13:46:22Z ykerherve $
+# $Id: Wine.pm 83 2006-05-04 00:06:36Z sky $
 
 use strict;
 

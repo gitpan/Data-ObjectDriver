@@ -1,7 +1,9 @@
-# $Id: Cache.pm 934 2005-06-24 21:08:30Z btrott $
+# $Id: Cache.pm 169 2006-05-04 00:15:55Z sky $
 
 package Data::ObjectDriver::Driver::Cache::Cache;
 use strict;
+use warnings;
+
 use base qw( Data::ObjectDriver::Driver::BaseCache );
 
 sub get_from_cache    { shift->cache->thaw(@_)   }

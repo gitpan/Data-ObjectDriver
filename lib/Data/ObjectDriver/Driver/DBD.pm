@@ -1,7 +1,9 @@
-# $Id: DBD.pm 1062 2005-12-15 12:55:49Z ykerherve $
+# $Id: DBD.pm 210 2006-05-23 18:58:57Z btrott $
 
 package Data::ObjectDriver::Driver::DBD;
 use strict;
+use warnings;
+
 
 sub new {
     my $class = shift;
@@ -18,5 +20,6 @@ sub bind_param_attributes { }
 sub db_column_name { $_[2] }
 sub fetch_id { }
 sub offset_implemented { 1 }
+sub map_error_code { }
 
 1;

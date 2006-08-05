@@ -1,7 +1,7 @@
 abstract: ''
 author: Six Apart <cpan@sixapart.com>
 distribution_type: module
-generated_by: Module::Install version 0.57
+generated_by: Module::Install version 0.61
 license: perl
 name: Data-ObjectDriver
 no_index:
@@ -14,4 +14,6 @@ requires:
   Class::Data::Inheritable: 0
   Class::Trigger: 0
   DBI: 0
-version: 0.02
+  List::Util: 0
+  Text::SimpleTable: 0
+version: 0.03

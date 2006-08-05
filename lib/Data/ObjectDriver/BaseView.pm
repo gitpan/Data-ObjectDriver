@@ -1,7 +1,9 @@
-# $Id: BaseView.pm 1137 2006-03-07 00:19:28Z miyagawa $
+# $Id: BaseView.pm 169 2006-05-04 00:15:55Z sky $
 
 package Data::ObjectDriver::BaseView;
 use strict;
+use warnings;
+
 use base qw( Data::ObjectDriver::BaseObject );
 
 use Carp ();
@@ -18,7 +20,7 @@ sub search {
         my %cols = map { $_ => 1 } @{ $class->properties->{columns} }; 
         my %having;
         for my $key (keys %$terms) {
-            if ($cols{$key} && $args->{sql_statement}->has_where($key, $terms->{$key})) {
+            if ($cols{$key} && ! $args->{sql_statement}->has_where($key)) {
                 # Don't need to delete from $term, because D::OD ignores
                 # it anyway when used as View class
                 $having{$key} = $terms->{$key};

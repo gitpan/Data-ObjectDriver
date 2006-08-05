@@ -1,13 +1,20 @@
-# $Id: ObjectDriver.pm 1108 2006-02-20 21:25:45Z btrott $
+# $Id: ObjectDriver.pm 231 2006-07-20 23:55:14Z btrott $
 
 package Data::ObjectDriver;
 use strict;
+use warnings;
+use Class::Accessor::Fast;
+
 use base qw( Class::Accessor::Fast );
+
+use Data::ObjectDriver::Profiler;
 
 __PACKAGE__->mk_accessors(qw( pk_generator ));
 
-our $VERSION = '0.02';
-our $DEBUG = 0;
+our $VERSION = '0.03';
+our $DEBUG = $ENV{DOD_DEBUG} || 0;
+our $PROFILE = $ENV{DOD_PROFILE} || 0;
+our $PROFILER = Data::ObjectDriver::Profiler->new;
 
 use Data::Dumper ();
 
@@ -25,6 +32,17 @@ sub init {
     $driver;
 }
 
+sub record_query {
+    my $driver = shift;
+    my($sql, $bind) = @_;
+    if ($DEBUG) {
+        $driver->debug($sql, $bind);
+    }
+    if ($PROFILE) {
+        $PROFILER->record_query($driver, $sql);
+    }
+}
+
 sub debug {
     my $driver = shift;
     return unless $DEBUG;
@@ -36,6 +54,24 @@ sub debug {
     }
 }
 
+sub profiler {
+    return $PROFILER;
+}
+
+sub list_or_iterator {
+    my $driver = shift;
+    my($objs) = @_;
+
+    ## Emulate the standard search behavior of returning an
+    ## iterator in scalar context, and the full list in list context.
+    if (wantarray) {
+        return @{$objs};
+    } else {
+        return sub { shift @{$objs} };
+    }
+}
+
+sub cache_object { }
 
 1;
 __END__
@@ -308,6 +344,11 @@ A reference to an array of column names to fetch in the I<SELECT> statement.
 
 Optional; the default is to fetch the values of all of the columns.
 
+=item * for_update
+
+If set to a true value, the I<SELECT> statement generated will include a
+I<FOR UPDATE> clause.
+
 =back
 
 =head2 Class->add_trigger($trigger, \&callback)
@@ -332,6 +373,9 @@ generate a primary key and insert the record into the database table.
 Otherwise, it will update the existing record.
 
 If an error occurs, I<save> will I<croak>.
+
+Internally, I<save> calls I<update> for records that already exist in the
+database, and I<insert> for those that don't.
 
 =head2 $obj->remove
 
@@ -441,6 +485,21 @@ Note that the invocation of callbacks is the responsibility of the object
 driver. If you implement a driver that does not delegate to
 I<Data::ObjectDriver::Driver::DBI>, it is I<your> responsibility to invoke the
 appropriate callbacks with the I<call_trigger> method.
+
+=head1 PROFILING
+
+For performance tuning, you can turn on query profiling by setting
+I<$Data::ObjectDriver::PROFILE> to a true value. Or, alternatively, you can
+set the I<DOD_PROFILE> environment variable to a true value before starting
+your application.
+
+To obtain the profile statistics, get the global
+I<Data::ObjectDriver::Profiler> instance:
+
+    my $profiler = Data::ObjectDriver->profiler;
+
+Then see the documentation for I<Data::ObjectDriver::Profiler> to see the
+methods on that class.
 
 =head1 EXAMPLES
 

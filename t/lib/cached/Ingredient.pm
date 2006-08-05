@@ -1,4 +1,4 @@
-# $Id: Ingredient.pm 990 2005-09-23 20:13:56Z btrott $
+# $Id: Ingredient.pm 60 2006-05-04 00:04:23Z sky $
 
 package Ingredient;
 use strict;

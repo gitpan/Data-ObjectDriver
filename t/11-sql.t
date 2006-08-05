@@ -1,9 +1,9 @@
-# $Id: 11-sql.t 1136 2006-03-03 01:18:23Z miyagawa $
+# $Id: 11-sql.t 216 2006-06-07 19:38:15Z btrott $
 
 use strict;
 
 use Data::ObjectDriver::SQL;
-use Test::More tests => 52;
+use Test::More tests => 53;
 
 my $stmt = ns();
 ok($stmt, 'Created SQL object');
@@ -15,13 +15,25 @@ is($stmt->as_sql, "FROM foo\n");
 $stmt->from([ 'foo', 'bar' ]);
 is($stmt->as_sql, "FROM foo, bar\n");
 
-$stmt->from([ 'foo' ]);
-$stmt->join({ type => 'inner', table => 'baz',
-              condition => 'foo.baz_id = baz.baz_id' });
+## Testing JOINs
+$stmt->from([]);
+$stmt->joins([]);
+$stmt->add_join(foo => { type => 'inner', table => 'baz',
+                         condition => 'foo.baz_id = baz.baz_id' });
 is($stmt->as_sql, "FROM foo INNER JOIN baz ON foo.baz_id = baz.baz_id\n");
 
-$stmt->from([ 'foo', 'bar' ]);
+$stmt->from([ 'bar' ]);
 is($stmt->as_sql, "FROM foo INNER JOIN baz ON foo.baz_id = baz.baz_id, bar\n");
+
+$stmt->from([]);
+$stmt->joins([]);
+$stmt->add_join(foo => [
+        { type => 'inner', table => 'baz b1',
+          condition => 'foo.baz_id = b1.baz_id AND b1.quux_id = 1' },
+        { type => 'left', table => 'baz b2',
+          condition => 'foo.baz_id = b2.baz_id AND b2.quux_id = 2' },
+    ]);
+is $stmt->as_sql, "FROM foo INNER JOIN baz b1 ON foo.baz_id = b1.baz_id AND b1.quux_id = 1 LEFT JOIN baz b2 ON foo.baz_id = b2.baz_id AND b2.quux_id = 2\n";
 
 ## Testing GROUP BY
 $stmt = ns();
@@ -81,7 +93,7 @@ is(scalar @{ $stmt->bind }, 1);
 is($stmt->bind->[0], 'bar');
 
 $stmt = ns(); $stmt->add_where(foo => [ 'bar', 'baz' ]);
-is($stmt->as_sql_where, "WHERE (foo = ? OR foo = ?)\n");
+is($stmt->as_sql_where, "WHERE (foo IN (?,?))\n");
 is(scalar @{ $stmt->bind }, 2);
 is($stmt->bind->[0], 'bar');
 is($stmt->bind->[1], 'baz');

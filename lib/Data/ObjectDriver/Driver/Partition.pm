@@ -1,7 +1,9 @@
-# $Id: Partition.pm 1067 2005-12-28 05:05:21Z btrott $
+# $Id: Partition.pm 169 2006-05-04 00:15:55Z sky $
 
 package Data::ObjectDriver::Driver::Partition;
 use strict;
+use warnings;
+
 use base qw( Data::ObjectDriver Class::Accessor::Fast );
 
 __PACKAGE__->mk_accessors(qw( get_driver ));
@@ -40,8 +42,16 @@ sub search {
 
 sub _exec_partitioned {
     my $driver = shift;
-    my($meth, $obj) = @_;
-    $driver->get_driver->($obj->primary_key)->$meth($obj);
+    my($meth, $obj, @rest) = @_;
+    ## If called as a class method, pass in the stuff in @rest.
+    my $d;
+    if (ref($obj)) {
+        my $arg = $obj->is_pkless ? $obj->column_values : $obj->primary_key;
+        $d = $driver->get_driver->($arg);
+    } else {
+        $d = $driver->get_driver->(@rest);
+    }
+    $d->$meth($obj, @rest);
 }
 
 1;

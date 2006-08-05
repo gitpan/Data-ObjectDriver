@@ -1,4 +1,4 @@
-# $Id: 33-views.t 1130 2006-03-02 03:45:07Z miyagawa $
+# $Id: 33-views.t 125 2006-05-04 00:10:20Z sky $
 
 use strict;
 

@@ -1,4 +1,4 @@
-# $Id: 04-clone.t 1100 2006-02-07 22:01:24Z mpaschal $
+# $Id: 04-clone.t 111 2006-05-04 00:09:02Z sky $
 
 use strict;
 

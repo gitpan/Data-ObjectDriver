@@ -1,18 +1,16 @@
-# $Id: Recipe.pm 232 2006-08-05 23:27:32Z btrott $
+# $Id: ErrorTest.pm 210 2006-05-23 18:58:57Z btrott $
 
-package Recipe;
+package ErrorTest;
 use strict;
 use base qw( Data::ObjectDriver::BaseObject );
 
 use Data::ObjectDriver::Driver::DBI;
 
 __PACKAGE__->install_properties({
-    columns => [ 'recipe_id', 'title' ],
-    datasource => 'recipes',
-    primary_key => 'recipe_id',
+    columns => [ 'foo' ],
+    datasource => 'error_test',
+    primary_key =>  [ ],
     driver => Data::ObjectDriver::Driver::DBI->new(
         dsn      => 'dbi:SQLite:dbname=global.db',
     ),
 });
-
-1;

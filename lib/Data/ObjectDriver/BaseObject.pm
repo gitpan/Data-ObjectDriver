@@ -1,7 +1,10 @@
-# $Id: BaseObject.pm 1127 2006-03-02 03:08:24Z miyagawa $
+# $Id: BaseObject.pm 232 2006-08-05 23:27:32Z btrott $
 
 package Data::ObjectDriver::BaseObject;
 use strict;
+use warnings;
+
+use Scalar::Util qw(weaken);
 use Carp ();
 
 use Class::Trigger qw( pre_save post_save post_load pre_search
@@ -13,6 +16,15 @@ sub install_properties {
     no strict 'refs';
     my($props) = @_;
     *{"${class}::__properties"} = sub { $props };
+
+    # predefine getter/setter methods here
+    foreach my $col (@{ $props->{columns} }) {
+        # Skip adding this method if the class overloads it.
+        # this lets the SUPER::columnname magic do it's thing
+        if (!defined (*{"${class}::$col"})) {
+            *{"${class}::$col"} = $class->column_func($col);
+        }
+    }
     $props;
 }
 
@@ -20,6 +32,123 @@ sub properties {
     my $this = shift;
     my $class = ref($this) || $this;
     $class->__properties;
+}
+
+# see docs below
+
+sub has_a {
+    my $class = shift;
+    my @args = @_;
+
+    # Iterate over each remote object
+    foreach my $config (@args) {
+        my $parentclass = $config->{class};
+
+        # Parameters
+        my $column = $config->{column};
+        my $method = $config->{method};
+        my $cached = $config->{cached} || 0;
+        my $parent_method = $config->{parent_method};
+
+        # column is required
+        if (!defined($column)) {
+            die "Please specify a valid column for $parentclass" 
+        }
+
+        # create a method name based on the column
+        if (! defined $method) {
+            if (!ref($column)) {
+                $method = $column;
+                $method =~ s/_id$//;
+                $method .= "_obj";
+            } elsif (ref($column) eq 'ARRAY') {
+                foreach my $col (@{$column}) {
+                    $col =~ s/_id$//;
+                    $method .= $col . '_';
+                }
+                $method .= "obj";
+            }
+        }
+
+        # die if we have clashing methods method
+        if (! defined $method || defined(*{"${class}::$method"})) {
+            die "Please define a valid method for $class->$column";
+        }
+
+        if ($cached) {
+            # Store cached item inside this object's namespace
+            my $cachekey = "__cache_$method";
+
+            no strict 'refs';
+            *{"${class}::$method"} = sub {
+                my $obj = shift;
+
+                return $obj->{$cachekey}
+                    if defined $obj->{$cachekey};
+
+                my $id = (ref($column) eq 'ARRAY')
+                    ? [ map { $obj->{column_values}->{$_} } @{$column}]
+                    : $obj->{column_values}->{$column}
+                    ;
+                ## Hold in a variable here too, so we don't lose it immediately
+                ## by having only the weak reference.
+                my $ret = $obj->{$cachekey} = $parentclass->lookup($id);
+                weaken $obj->{$cachekey};
+                return $ret;
+            };
+        } else {
+            if (ref($column)) {
+                no strict 'refs';
+                *{"${class}::$method"} = sub {
+                    my $obj = shift;
+                    return $parentclass->lookup([ map{ $obj->{column_values}->{$_} } @{$column}]);
+                };
+            } else {
+                no strict 'refs';
+                *{"${class}::$method"} = sub {
+                    return $parentclass->lookup(shift()->{column_values}->{$column});
+                };
+            }
+        }
+
+        # now add to the parent
+        if (!defined $parent_method) {
+            $parent_method = lc($class);
+            $parent_method =~ s/^.*:://; 
+
+            $parent_method .= '_objs';
+        }
+        if (ref($column)) {
+            no strict 'refs';
+            *{"${parentclass}::$parent_method"} = sub {
+                my $obj = shift;
+                my $terms = shift || {};
+                my $args = shift;
+
+                my $primary_key_tuple = $obj->primary_key_tuple;
+                my $primary_key = $obj->primary_key;
+
+                # inject pk search into given terms.
+                # composite key, ugh
+                foreach my $key (@{$primary_key_tuple}) {
+                    $terms->{$key} = shift(@{$primary_key});
+                }
+
+                return $class->search($terms, $args);
+            };
+        } else {
+            no strict 'refs';
+            *{"${parentclass}::$parent_method"} = sub {
+                my $obj = shift;
+                my $terms = shift || {};
+                my $args = shift;
+                # TBD - use primary_key_to_terms
+                $terms->{$column} = $obj->primary_key;
+                return $class->search($terms, $args);
+            };
+        };
+    } # end of loop over class names
+    return;
 }
 
 sub driver {
@@ -34,6 +163,29 @@ sub get_driver {
 
 sub new { bless {}, shift }
 
+sub is_pkless {
+    my $obj = shift;
+    my $prop_pk = $obj->properties->{primary_key};
+    return 1 if ! $prop_pk;
+    return 1 if ref $prop_pk eq 'ARRAY' && ! @$prop_pk;
+}
+
+sub is_primary_key {
+    my $obj = shift;
+    my($col) = @_;
+
+    my $prop_pk = $obj->properties->{primary_key};
+    if (ref($prop_pk)) {
+        for my $pk (@$prop_pk) {
+            return 1 if $pk eq $col;
+        }
+    } else {
+        return 1 if $prop_pk eq $col;
+    }
+
+    return;
+}
+
 sub primary_key_tuple {
     my $obj = shift;
     my $pk = $obj->properties->{primary_key};
@@ -44,16 +196,47 @@ sub primary_key_tuple {
 sub primary_key {
     my $obj = shift;
     my $pk = $obj->primary_key_tuple;
-    my @val = map $obj->$_(), @$pk;
+    my @val = map { $obj->$_() }  @$pk;
     @val == 1 ? $val[0] : \@val;
+}
+
+sub is_same_array {
+    my($a1, $a2) = @_;
+    return if ($#$a1 != $#$a2);
+    for (my $i = 0; $i <= $#$a1; $i++) {
+        return if $a1->[$i] ne $a2->[$i];
+    }
+    return 1;
+}
+
+sub primary_key_to_terms {
+    my($obj, $id) = @_;
+    my $pk = $obj->primary_key_tuple;
+    if (! defined $id) { 
+        $id = $obj->primary_key;
+    } else {
+        if (ref($id) eq 'HASH') {
+            my @keys = sort keys %$id;
+            unless (is_same_array(\@keys, [ sort @$pk ])) {
+                Carp::croak("keys don't match with primary keys: @keys");
+            }
+            return $id;
+        }
+    }
+    $id = [ $id ] unless ref($id) eq 'ARRAY';
+    my $i = 0;
+    my %terms;
+    @terms{@$pk} = @$id;
+    \%terms;
 }
 
 sub has_primary_key {
     my $obj = shift;
+    return unless @{$obj->primary_key_tuple};
     my $val = $obj->primary_key;
     $val = [ $val ] unless ref($val) eq 'ARRAY';
     for my $v (@$val) {
-        return 0 unless defined $v;
+        return unless defined $v;
     }
     1;
 }
@@ -80,7 +263,7 @@ sub set_values {
         unless ( $obj->has_column($col) ) {
             Carp::croak("You tried to set inexistent column $col to value $values->{$col} on " . ref($obj));
         }
-        $obj->column($col => $values->{$col});
+        $obj->$col($values->{$col});
     }
 }
 
@@ -88,10 +271,12 @@ sub set_values_internal {
     my $obj = shift;
     my $values = shift;
     for my $col (keys %$values) {
-        unless ( $obj->has_column($col) ) {
-            Carp::croak("You tried to set inexistent column $col to value $values->{$col} on " . ref($obj));
-        }
-        $obj->column($col => $values->{$col}, { no_changed_flag => 1 });
+        # Not needed for the internal version of this method
+        #unless ( $obj->has_column($col) ) {
+        #    Carp::croak("You tried to set inexistent column $col to value $values->{$col} on " . ref($obj));
+        #}
+
+        $obj->column_values->{$col} = $values->{$col};
     }
 }
 
@@ -124,7 +309,7 @@ sub column_names {
     [ @{ shift->properties->{columns} } ]
 }
 
-sub column_values { $_[0]->{'column_values'} }
+sub column_values { $_[0]->{'column_values'} ||= {} }
 
 ## In 0.1 version we didn't die on inexistent column
 ## which might lead to silent bugs
@@ -137,19 +322,49 @@ sub column {
         Carp::croak("Cannot find column '$col' for class '" . ref($obj) . "'");
     }
 
+    # set some values
     if (@_) {
         $obj->{column_values}->{$col} = shift;
         unless ($_[0] && ref($_[0]) eq 'HASH' && $_[0]->{no_changed_flag}) {
             $obj->{changed_cols}->{$col}++;
         }
     }
-        
+
     $obj->{column_values}->{$col};
+}
+
+sub column_func {
+    my $obj = shift;
+    my $col = shift or die "Must specify column";
+
+    return sub {
+        my $obj = shift;
+        # getter
+        return $obj->{column_values}->{$col} unless (@_);
+
+        # setter 
+        my ($val, $flags) = @_;
+        $obj->{column_values}->{$col} = $val;
+        unless (($val && ref($val) eq 'HASH' && $val->{no_changed_flag}) ||
+                $flags->{no_changed_flag}) {
+            $obj->{changed_cols}->{$col}++;
+        }
+
+        return $obj->{column_values}->{$col};
+    };
+}
+
+
+sub changed_cols_and_pk {
+    my $obj = shift;
+    keys %{$obj->{changed_cols}};
 }
 
 sub changed_cols {
     my $obj = shift;
-    keys %{$obj->{changed_cols}};
+    my $pk = $obj->primary_key_tuple;
+    my %pk = map { $_ => 1 } @$pk;
+    grep !$pk{$_}, $obj->changed_cols_and_pk;
 }
 
 sub is_changed {
@@ -157,10 +372,7 @@ sub is_changed {
     if (@_) {
         return exists $obj->{changed_cols}->{$_[0]};
     } else {
-        my $pk = $obj->primary_key_tuple;
-        my %pk = map { $_ => 1 } @$pk;
-        my @changed_cols = grep !$pk{$_}, $obj->changed_cols;
-        return @changed_cols > 0;
+        return $obj->changed_cols > 0;
     }
 }
 
@@ -172,16 +384,48 @@ sub exists {
 
 sub save {
     my $obj = shift;
-    if ($obj->exists) {
-        return $obj->update;
+    if ($obj->exists(@_)) {
+        return $obj->update(@_);
     } else {
-        return $obj->insert;
+        return $obj->insert(@_);
     }
 }
 
-sub lookup          { shift->_proxy('lookup',       @_) }
-sub lookup_multi    { shift->_proxy('lookup_multi', @_) }
-sub search          { shift->_proxy('search',       @_) }
+sub lookup {
+    my $class = shift;
+    my $driver = $class->driver;
+    my $obj = $driver->lookup($class, @_) or return;
+    $driver->cache_object($obj);
+    $obj;
+}
+
+sub lookup_multi {
+    my $class = shift;
+    my $driver = $class->driver;
+    my $objs = $driver->lookup_multi($class, @_) or return;
+    for my $obj (@$objs) {
+        $driver->cache_object($obj) if $obj;
+    }
+    $objs;
+}
+
+sub search {
+    my $class = shift;
+    my($terms, $args) = @_;
+    my $driver = $class->driver;
+    my @objs = $driver->search($class, $terms, $args);
+
+    ## Don't attempt to cache objects where the caller specified fetchonly,
+    ## because they won't be complete.
+    ## Also skip this step if we don't get any objects back from the search
+    if (!$args->{fetchonly} || !@objs) {
+        for my $obj (@objs) {
+            $driver->cache_object($obj) if $obj;
+        }
+    }
+    $driver->list_or_iterator(\@objs);
+}
+
 sub remove          { shift->_proxy('remove',       @_) }
 sub update          { shift->_proxy('update',       @_) }
 sub insert          { shift->_proxy('insert',       @_) }
@@ -203,21 +447,56 @@ sub _proxy {
     $obj->driver->$meth($obj, @args);
 }
 
+sub deflate { { columns => shift->column_values } }
+
+sub inflate {
+    my $class = shift;
+    my($deflated) = @_;
+    my $obj = $class->new;
+    $obj->set_values($deflated->{columns});
+    $obj->{changed_cols} = {};
+    $obj;
+}
+
 sub DESTROY { }
 
-our $AUTOLOAD;
 sub AUTOLOAD {
     my $obj = $_[0];
-    (my $col = $AUTOLOAD) =~ s!.+::!!;
+    (my $col = our $AUTOLOAD) =~ s!.+::!!;
     no strict 'refs';
     Carp::croak("Cannot find method '$col' for class '$obj'") unless ref $obj;
     unless ($obj->has_column($col)) {
         Carp::croak("Cannot find column '$col' for class '" . ref($obj) . "'");
     }
-    *$AUTOLOAD = sub {
-        shift()->column($col, @_);
-    };
+
+    *$AUTOLOAD = $obj->column_func($col);
+
     goto &$AUTOLOAD;
+}
+
+sub has_partitions {
+    my $class = shift;
+    my(%param) = @_;
+    my $how_many = delete $param{number}
+        or Carp::croak("number (of partitions) is required");
+
+    ## Save the get_driver subref that we were passed, so that the
+    ## SimplePartition driver can access it.
+    $class->properties->{partition_get_driver} = delete $param{get_driver}
+        or Carp::croak("get_driver is required");
+
+    ## When creating a new $class object, we should automatically fill in
+    ## the partition ID by selecting one at random, unless a partition_id
+    ## is already defined. This allows us to keep it simple but for the
+    ## caller to do something more complex, if it wants to.
+    $class->add_trigger(pre_insert => sub {
+        my($obj, $orig_obj) = @_;
+        unless (defined $obj->partition_id) {
+            my $partition_id = int(rand $how_many) + 1;
+            $obj->partition_id($partition_id);
+            $orig_obj->partition_id($partition_id);
+        }
+    });
 }
 
 1;
@@ -240,7 +519,51 @@ with the I<Data::ObjectDriver> object relational mapper.
 
 =head2 Class->install_properties({ ... })
 
+Sets up columns, indexes, primary keys, etc.
+
 =head2 Class->properties
+
+Returns the list of properties.
+
+=head2 Class->has_a(ParentClass => { ... }, ParentClass2 => { ...} )
+
+Creates utility methods that map this object to parent Data::ObjectDriver objects.
+
+Pass in a list of parent classes to map with a hash of parameters.  The following parameters
+are recognized:
+
+=over 4
+
+=item * column
+
+Name of the column(s) in this class to map with.  Pass in a single string if
+the column is a singular key, an array ref if this is a composite key.
+
+   column => 'user_id'
+   column => ['user_id', 'photo_id']
+
+=item * method [OPTIONAL]
+
+Name of the method to create in this class.  Defaults to the column name(s) without
+the _id suffix and with the suffix _obj appended.
+
+=item * parent_method [OPTIONAL]
+
+Name of the method created in the parent class.  Default is the lowercased 
+name of the current class with the suffix _objs.
+
+=item * cached [OPTIONAL]
+
+If set to 1 cache the result of the fetching the parent object in the current class.  Note
+that this is a private copy to this class only, and does not interact with other caches
+in the system.
+
+=back
+
+=head2 column_func
+
+This method is called to get/set column values.  Subclasses can override this and get different
+behavior.
 
 =head2 Class->driver
 
@@ -271,7 +594,17 @@ except for primary keys, which are set to C<undef>.
 Returns a new object of the same class as I<$obj> containing the same data,
 including all key fields.
 
-=head2 $obj->...
+=head2 $obj->deflate
+
+Returns a minimal representation of the object, for use in caches where
+you might want to preserve space (like memcached). Can also be overridden
+by subclasses to store the optimal representation of an object in the
+cache. For example, if you have metadata attached to an object, you might
+want to store that in the cache, as well.
+
+=head2 $class->inflate($deflated)
+
+Inflates the deflated representation of the object I<$deflated> into a
+proper object in the class I<$class>.
 
 =cut
-
