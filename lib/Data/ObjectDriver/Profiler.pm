@@ -1,4 +1,4 @@
-# $Id: Profiler.pm 228 2006-07-20 05:54:51Z btrott $
+# $Id: Profiler.pm 288 2006-10-04 23:06:00Z mpaschal $
 
 package Data::ObjectDriver::Profiler;
 use strict;
@@ -6,7 +6,14 @@ use warnings;
 use base qw( Class::Accessor::Fast );
 
 use List::Util qw( min );
-use Text::SimpleTable;
+
+my $simpletable;
+BEGIN {
+    eval {
+        require Text::SimpleTable;
+        $simpletable = 1;
+    };
+}
 
 __PACKAGE__->mk_accessors(qw( statistics query_log ));
 
@@ -62,6 +69,7 @@ sub total_queries { return $_[0]->statistics->{'DBI:total_queries'} || 0 }
 
 sub report_queries_by_type {
     my $profiler = shift;
+    return "Text::SimpleTable unavailable at startup, reports disabled." unless $simpletable;
     my $stats = $profiler->statistics;
     my $tbl = Text::SimpleTable->new( [ 64, 'Type' ], [ 9, 'Number' ] );
     for my $stat (keys %$stats) {
@@ -74,9 +82,10 @@ sub report_queries_by_type {
 
 sub report_query_frequency {
     my $profiler = shift;
+    return "Text::SimpleTable unavailable at startup, reports disabled." unless $simpletable;
     my $freq = $profiler->query_frequency;
     my $tbl = Text::SimpleTable->new( [ 64, 'Query' ], [ 9, 'Number' ] );
-    my @sql = sort { $freq->{$b} <=> $freq->{$a} } keys %$freq;
+    my @sql = sort { ($freq->{$b} <=> $freq->{$a}) || ($a cmp $b) } keys %$freq;
     for my $sql (@sql[0..min($#sql, 19)]) {
         $tbl->row($sql, $freq->{$sql});
     }

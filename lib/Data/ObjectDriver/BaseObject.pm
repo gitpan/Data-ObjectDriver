@@ -1,4 +1,4 @@
-# $Id: BaseObject.pm 232 2006-08-05 23:27:32Z btrott $
+# $Id: BaseObject.pm 357 2007-05-01 04:27:29Z miyagawa $
 
 package Data::ObjectDriver::BaseObject;
 use strict;
@@ -9,23 +9,40 @@ use Carp ();
 
 use Class::Trigger qw( pre_save post_save post_load pre_search
                        pre_insert post_insert pre_update post_update
-                       pre_remove post_remove );
+                       pre_remove post_remove post_inflate );
 
 sub install_properties {
     my $class = shift;
-    no strict 'refs';
     my($props) = @_;
-    *{"${class}::__properties"} = sub { $props };
-
-    # predefine getter/setter methods here
-    foreach my $col (@{ $props->{columns} }) {
-        # Skip adding this method if the class overloads it.
-        # this lets the SUPER::columnname magic do it's thing
-        if (!defined (*{"${class}::$col"})) {
-            *{"${class}::$col"} = $class->column_func($col);
-        }
+    my $columns = delete $props->{columns}; 
+    $props->{columns} = [];
+    {
+        no strict 'refs'; ## no critic
+        *{"${class}::__properties"} = sub { $props };
     }
-    $props;
+
+    foreach my $col (@$columns) {
+        $class->install_column($col);
+    }
+    return $props;
+}
+
+sub install_column {
+    my($class, $col, $type) = @_;
+    my $props = $class->properties;
+
+    push @{ $props->{columns} }, $col;
+    $props->{column_names}{$col} = ();
+    # predefine getter/setter methods here
+    # Skip adding this method if the class overloads it.
+    # this lets the SUPER::columnname magic do it's thing
+    if (! $class->can($col)) {
+        no strict 'refs'; ## no critic
+        *{"${class}::$col"} = $class->column_func($col);
+    }
+    if ($type) {
+        $props->{column_defs}{$col} = $type;
+    }
 }
 
 sub properties {
@@ -52,7 +69,7 @@ sub has_a {
 
         # column is required
         if (!defined($column)) {
-            die "Please specify a valid column for $parentclass" 
+            die "Please specify a valid column for $parentclass"
         }
 
         # create a method name based on the column
@@ -63,8 +80,9 @@ sub has_a {
                 $method .= "_obj";
             } elsif (ref($column) eq 'ARRAY') {
                 foreach my $col (@{$column}) {
-                    $col =~ s/_id$//;
-                    $method .= $col . '_';
+                    my $part = $col;
+                    $part =~ s/_id$//;
+                    $method .= $part . '_';
                 }
                 $method .= "obj";
             }
@@ -79,7 +97,7 @@ sub has_a {
             # Store cached item inside this object's namespace
             my $cachekey = "__cache_$method";
 
-            no strict 'refs';
+            no strict 'refs'; ## no critic
             *{"${class}::$method"} = sub {
                 my $obj = shift;
 
@@ -98,13 +116,13 @@ sub has_a {
             };
         } else {
             if (ref($column)) {
-                no strict 'refs';
+                no strict 'refs'; ## no critic
                 *{"${class}::$method"} = sub {
                     my $obj = shift;
                     return $parentclass->lookup([ map{ $obj->{column_values}->{$_} } @{$column}]);
                 };
             } else {
-                no strict 'refs';
+                no strict 'refs'; ## no critic
                 *{"${class}::$method"} = sub {
                     return $parentclass->lookup(shift()->{column_values}->{$column});
                 };
@@ -114,30 +132,29 @@ sub has_a {
         # now add to the parent
         if (!defined $parent_method) {
             $parent_method = lc($class);
-            $parent_method =~ s/^.*:://; 
+            $parent_method =~ s/^.*:://;
 
             $parent_method .= '_objs';
         }
         if (ref($column)) {
-            no strict 'refs';
+            no strict 'refs'; ## no critic
             *{"${parentclass}::$parent_method"} = sub {
                 my $obj = shift;
                 my $terms = shift || {};
                 my $args = shift;
 
-                my $primary_key_tuple = $obj->primary_key_tuple;
                 my $primary_key = $obj->primary_key;
 
                 # inject pk search into given terms.
                 # composite key, ugh
-                foreach my $key (@{$primary_key_tuple}) {
+                foreach my $key (@$column) {
                     $terms->{$key} = shift(@{$primary_key});
                 }
 
                 return $class->search($terms, $args);
             };
         } else {
-            no strict 'refs';
+            no strict 'refs'; ## no critic
             *{"${parentclass}::$parent_method"} = sub {
                 my $obj = shift;
                 my $terms = shift || {};
@@ -161,7 +178,22 @@ sub get_driver {
     $class->properties->{get_driver} = shift if @_;
 }
 
-sub new { bless {}, shift }
+sub new {
+    my $obj = bless {}, shift;
+
+    return $obj->init(@_);
+}
+
+sub init {
+    my $self = shift;
+
+    while (@_) {
+        my $field = shift;
+        my $val   = shift;
+        $self->$field($val);
+    }
+    return $self;
+}
 
 sub is_pkless {
     my $obj = shift;
@@ -188,7 +220,7 @@ sub is_primary_key {
 
 sub primary_key_tuple {
     my $obj = shift;
-    my $pk = $obj->properties->{primary_key};
+    my $pk = $obj->properties->{primary_key} || return;
     $pk = [ $pk ] unless ref($pk) eq 'ARRAY';
     $pk;
 }
@@ -212,19 +244,18 @@ sub is_same_array {
 sub primary_key_to_terms {
     my($obj, $id) = @_;
     my $pk = $obj->primary_key_tuple;
-    if (! defined $id) { 
+    if (! defined $id) {
         $id = $obj->primary_key;
     } else {
         if (ref($id) eq 'HASH') {
             my @keys = sort keys %$id;
             unless (is_same_array(\@keys, [ sort @$pk ])) {
-                Carp::croak("keys don't match with primary keys: @keys");
+                Carp::confess("keys don't match with primary keys: @keys|@$pk");
             }
             return $id;
         }
     }
     $id = [ $id ] unless ref($id) eq 'ARRAY';
-    my $i = 0;
     my %terms;
     @terms{@$pk} = @$id;
     \%terms;
@@ -293,15 +324,12 @@ sub clone_all {
     my $obj = shift;
     my $clone = ref($obj)->new();
     $clone->set_values_internal($obj->column_values);
-    $clone->{changed_cols} = $obj->{changed_cols};
+    $clone->{changed_cols} = defined $obj->{changed_cols} ? { %{$obj->{changed_cols}} } : undef;
     $clone;
 }
 
 sub has_column {
-    my $obj = shift;
-    my($col) = @_;
-    $obj->{__col_names} ||= { map { $_ => 1 } @{ $obj->column_names } };
-    exists $obj->{__col_names}->{$col};
+    return exists $_[0]->properties->{column_names}{$_[1]};
 }
 
 sub column_names {
@@ -313,7 +341,7 @@ sub column_values { $_[0]->{'column_values'} ||= {} }
 
 ## In 0.1 version we didn't die on inexistent column
 ## which might lead to silent bugs
-## You should override column if you want to find the old 
+## You should override column if you want to find the old
 ## behaviour
 sub column {
     my $obj = shift;
@@ -342,11 +370,10 @@ sub column_func {
         # getter
         return $obj->{column_values}->{$col} unless (@_);
 
-        # setter 
+        # setter
         my ($val, $flags) = @_;
         $obj->{column_values}->{$col} = $val;
-        unless (($val && ref($val) eq 'HASH' && $val->{no_changed_flag}) ||
-                $flags->{no_changed_flag}) {
+        unless ($flags && ref($flags) eq 'HASH' && $flags->{no_changed_flag}) {
             $obj->{changed_cols}->{$col}++;
         }
 
@@ -391,6 +418,13 @@ sub save {
     }
 }
 
+sub bulk_insert {
+    my $class = shift;
+    my $driver = $class->driver;
+
+    return $driver->bulk_insert($class, @_);
+}
+
 sub lookup {
     my $class = shift;
     my $driver = $class->driver;
@@ -429,14 +463,14 @@ sub search {
 sub remove          { shift->_proxy('remove',       @_) }
 sub update          { shift->_proxy('update',       @_) }
 sub insert          { shift->_proxy('insert',       @_) }
+sub replace         { shift->_proxy('replace',      @_) }
 sub fetch_data      { shift->_proxy('fetch_data',   @_) }
 
 sub refresh {
-    my $obj = shift; 
+    my $obj = shift;
     return unless $obj->has_primary_key;
     my $fields = $obj->fetch_data;
     $obj->set_values_internal($fields);
-    # XXX not sure this is the right place
     $obj->call_trigger('post_load');
     return 1;
 }
@@ -455,7 +489,8 @@ sub inflate {
     my $obj = $class->new;
     $obj->set_values($deflated->{columns});
     $obj->{changed_cols} = {};
-    $obj;
+    $obj->call_trigger('post_inflate');
+    return $obj;
 }
 
 sub DESTROY { }
@@ -463,13 +498,15 @@ sub DESTROY { }
 sub AUTOLOAD {
     my $obj = $_[0];
     (my $col = our $AUTOLOAD) =~ s!.+::!!;
-    no strict 'refs';
     Carp::croak("Cannot find method '$col' for class '$obj'") unless ref $obj;
     unless ($obj->has_column($col)) {
         Carp::croak("Cannot find column '$col' for class '" . ref($obj) . "'");
     }
 
-    *$AUTOLOAD = $obj->column_func($col);
+    {
+        no strict 'refs'; ## no critic
+        *$AUTOLOAD = $obj->column_func($col);
+    }
 
     goto &$AUTOLOAD;
 }
@@ -479,6 +516,9 @@ sub has_partitions {
     my(%param) = @_;
     my $how_many = delete $param{number}
         or Carp::croak("number (of partitions) is required");
+
+    ## save the number of partitions in the class
+    $class->properties->{number_of_partitions} = $how_many;
 
     ## Save the get_driver subref that we were passed, so that the
     ## SimplePartition driver can access it.
@@ -500,6 +540,7 @@ sub has_partitions {
 }
 
 1;
+
 __END__
 
 =head1 NAME
@@ -508,93 +549,470 @@ Data::ObjectDriver::BaseObject - base class for modeled objects
 
 =head1 SYNOPSIS
 
-See synopsis in I<Data::ObjectDriver>.
+    package Ingredient;
+    use base qw( Data::ObjectDriver::BaseObject );
+
+    __PACKAGE__->install_properties({
+        columns     => [ 'ingredient_id', 'recipe_id', 'name', 'quantity' ],
+        datasource  => 'ingredient',
+        primary_key => [ 'recipe_id', 'ingredient_id' ],
+        driver      => FoodDriver->driver,
+    });
+
+    __PACKAGE__->has_a(
+        { class => 'Recipe', column => 'recipe_id', }
+    );
+
+    package main;
+
+    my ($ingredient) = Ingredient->search({ recipe_id => 4, name => 'rutabaga' });
+    $ingredient->quantity(7);
+    $ingredient->save();
+
 
 =head1 DESCRIPTION
 
 I<Data::ObjectDriver::BaseObject> provides services to data objects modeled
 with the I<Data::ObjectDriver> object relational mapper.
 
-=head1 USAGE
+=head1 CLASS DEFINITION
 
-=head2 Class->install_properties({ ... })
+=head2 C<Class-E<gt>install_properties(\%params)>
 
-Sets up columns, indexes, primary keys, etc.
+Defines all the properties of the specified object class. Generally you should
+call C<install_properties()> in the body of your class definition, so the
+properties can be set when the class is C<use>d or C<require>d.
 
-=head2 Class->properties
-
-Returns the list of properties.
-
-=head2 Class->has_a(ParentClass => { ... }, ParentClass2 => { ...} )
-
-Creates utility methods that map this object to parent Data::ObjectDriver objects.
-
-Pass in a list of parent classes to map with a hash of parameters.  The following parameters
-are recognized:
+Required members of C<%params> are:
 
 =over 4
 
-=item * column
+=item * C<columns>
 
-Name of the column(s) in this class to map with.  Pass in a single string if
-the column is a singular key, an array ref if this is a composite key.
+All the columns in the object class. This property is an arrayref.
 
-   column => 'user_id'
-   column => ['user_id', 'photo_id']
+=item * C<datasource>
 
-=item * method [OPTIONAL]
+The identifier of the table in which the object class's data are stored.
+Usually the datasource is simply the table name, but the datasource can be
+decorated into the table name by the C<Data::ObjectDriver::DBD> module if the
+database requires special formatting of table names.
 
-Name of the method to create in this class.  Defaults to the column name(s) without
-the _id suffix and with the suffix _obj appended.
+=item * C<driver> or C<get_driver>
 
-=item * parent_method [OPTIONAL]
+The driver used to perform database operations (lookup, update, etc) for the
+object class.
 
-Name of the method created in the parent class.  Default is the lowercased 
-name of the current class with the suffix _objs.
-
-=item * cached [OPTIONAL]
-
-If set to 1 cache the result of the fetching the parent object in the current class.  Note
-that this is a private copy to this class only, and does not interact with other caches
-in the system.
+C<driver> is the instance of C<Data::ObjectDriver> to use. If your driver
+requires configuration options not available when the properties are initially
+set, specify a coderef as C<get_driver> instead. It will be called the first
+time the driver is needed, storing the driver in the class's C<driver> property
+for subsequent calls.
 
 =back
 
-=head2 column_func
+The optional members of C<%params> are:
 
-This method is called to get/set column values.  Subclasses can override this and get different
-behavior.
+=over 4
 
-=head2 Class->driver
+=item * C<primary_key>
 
-Returns the database driver for this class, invoking the class's I<get_driver>
-function if necessary.
+The column or columns used to uniquely identify an instance of the object
+class. If one column (such as a simple numeric ID) identifies the class,
+C<primary_key> should be a scalar. Otherwise, C<primary_key> is an arrayref.
 
-=head2 Class->get_driver($driver)
+=item * C<column_defs>
 
-Sets the function used to find the object driver for I<Class> objects.
+Specifies types for specially typed columns, if any, as a hashref. For example,
+if a column holds a timestamp, name it in C<column_defs> as a C<date> for
+proper handling with some C<Data::ObjectDriver::Driver::DBD> database drivers.
+Columns for which types aren't specified are handled as C<char> columns.
 
-=head2 $obj->primary_key
+Known C<column_defs> types are:
 
-Returns the B<values> of the primary key fields of I<$obj>.
+=over 4
 
-=head2 Class->primary_key_tuple
+=item * C<blob>
 
-Returns the B<names> of the primary key fields for objects of class I<Class>.
+A blob of binary data. C<Data::ObjectDriver::Driver::DBD::Pg> maps this to
+C<DBI::Pg::PG_BYTEA>, and C<DBD::SQLite> to C<DBI::SQL_BLOB>.
 
-=head2 $obj->has_primary_key
+=item * C<bin_char>
 
-=head2 $obj->clone
+A non-blob string of binary data. C<Data::ObjectDriver::Driver::DBD::SQLite>
+maps this to C<DBI::SQL_BINARY>.
+
+=back
+
+Other types may be defined by custom database drivers as needed, so consult
+their documentation.
+
+=item * C<db>
+
+The name of the database. When used with C<Data::ObjectDriver::Driver::DBI>
+type object drivers, this name is passed to the C<init_db> method when the
+actual database handle is being created.
+
+=back
+
+Custom object drivers may define other properties for your object classes.
+Consult the documentation of those object drivers for more information.
+
+=head2 C<Class-E<gt>install_column($col, $def)>
+
+Modify the Class definition to declare a new column C<$col> of definition <$def>
+(see L<column_defs>).
+
+=head2 C<Class-E<gt>has_a(@definitions)>
+
+B<NOTE:> C<has_a> is an experimental system, likely to both be buggy and change
+in future versions.
+
+Defines a foreign key reference between two classes, creating accessor methods
+to retrieve objects both ways across the reference. For each defined reference,
+two methods are created: one for objects of class C<Class> to load the objects
+they reference, and one for objects of the referenced class to load the set of
+C<Class> objects that reference I<them>.
+
+For example, this definition:
+
+    package Ingredient;
+    __PACKAGE__->has_a(
+        { class => 'Recipe', column => 'recipe_id' },
+    );
+
+would create C<Ingredient-E<gt>recipe_obj> and C<Recipe-E<gt>ingredient_objs>
+instance methods.
+
+Each member of C<@definitions> is a hashref containing the parameters for
+creating one accessor method. The required members of these hashes are:
+
+=over 4
+
+=item * C<class>
+
+The class to associate.
+
+=item * C<column>
+
+The column or columns in this class that identify the primary key of the
+associated object. As with primary keys, use a single scalar string for a
+single column or an arrayref for a composite key.
+
+=back
+
+The optional members of C<has_a()> definitions are:
+
+=over 4
+
+=item * C<method>
+
+The name of the accessor method to create.
+
+By default, the method name is the concatenated set of column names with each
+C<_id> suffix removed, and the suffix C<_obj> appended at the end of the method
+name. For example, if C<column> were C<['recipe_id', 'ingredient_id']>, the
+resulting method would be called C<recipe_ingredient_obj> by default.
+
+=item * C<cached>
+
+Whether to keep a reference to the foreign object once it's loaded. Subsequent
+calls to the accessor method would return that reference immediately.
+
+=item * C<parent_method>
+
+The name of the reciprocal method created in the referenced class named in
+C<class>.
+
+By default, that method is named with the lowercased name of the current class
+with the suffix C<_objs>. For example, if in your C<Ingredient> class you
+defined a relationship with C<Recipe> on the column C<recipe_id>, this would
+create a C<$recipe-E<gt>ingredient_objs> method.
+
+Note that if you reference one class with multiple sets of fields, you can omit
+only one parent_method; otherwise the methods would be named the same thing.
+For instance, if you had a C<Friend> class with two references to C<User>
+objects in its C<user_id> and C<friend_id> columns, one of them would need a
+C<parent_method>.
+
+=back
+
+=head2 C<Class-E<gt>has_partitions(%param)>
+
+Defines that the given class is partitioned, configuring it for use with the
+C<Data::ObjectDriver::Driver::SimplePartition> object driver. Required members
+of C<%param> are:
+
+=over 4
+
+=item * C<number>
+
+The number of partitions in which objects of this class may be stored.
+
+=item * C<get_driver>
+
+A function that returns an object driver, given a partition ID and any extra
+parameters specified when the class's
+C<Data::ObjectDriver::Driver::SimplePartition> was instantiated.
+
+=back
+
+Note that only the parent object for use with the C<SimplePartition> driver
+should use C<has_partitions()>. See
+C<Data::ObjectDriver::Driver::SimplePartition> for more about partitioning.
+
+=head1 BASIC USAGE
+
+=head2 C<Class-E<gt>lookup($id)>
+
+Returns the instance of C<Class> with the given value for its primary key. If
+C<Class> has a complex primary key (more than one column), C<$id> should be an
+arrayref specifying the column values in the same order as specified in the
+C<primary_key> property.
+
+=head2 C<Class-E<gt>search(\%terms, [\%args])>
+
+Returns all instances of C<Class> that match the values specified in
+C<\%terms>, keyed on column names. In list context, C<search> returns the
+objects containing those values. In scalar context, C<search> returns an
+iterator function containing the same set of objects.
+
+Your search can be customized with parameters specified in C<\%args>. Commonly
+recognized parameters (those implemented by the standard C<Data::ObjectDriver>
+object drivers) are:
+
+=over 4
+
+=item * C<sort>
+
+A column by which to order the object results.
+
+=item * C<direction>
+
+If set to C<descend>, the results (ordered by the C<sort> column) are returned
+in descending order. Otherwise, results will be in ascending order.
+
+=item * C<limit>
+
+The number of results to return, at most. You can use this with C<offset> to
+paginate your C<search()> results.
+
+=item * C<offset>
+
+The number of results to skip before the first returned result. Use this with
+C<limit> to paginate your C<search()> results.
+
+=item * C<fetchonly>
+
+A list (arrayref) of columns that should be requested. If specified, only the
+specified columns of the resulting objects are guaranteed to be set to the
+correct values.
+
+Note that any caching object drivers you use may opt to ignore C<fetchonly>
+instructions, or decline to cache objects queried with C<fetchonly>.
+
+=item * C<for_update>
+
+If true, instructs the object driver to indicate the query is a search, but the
+application may want to update the data after. That is, the generated SQL
+C<SELECT> query will include a C<FOR UPDATE> clause.
+
+=back
+
+All options are passed to the object driver, so your driver may support
+additional options.
+
+=head2 C<$obj-E<gt>exists()>
+
+Returns true if C<$obj> already exists in the database.
+
+=head2 C<$obj-E<gt>save()>
+
+Saves C<$obj> to the database, whether it is already there or not. That is,
+C<save()> is functionally:
+
+    $obj->exists() ? $obj->update() : $obj->insert()
+
+=head2 C<$obj-E<gt>update()>
+
+Saves changes to C<$obj>, an object that already exists in its database.
+
+=head2 C<$obj-E<gt>insert()>
+
+Adds C<$obj> to the database in which it should exist, according to its object
+driver and configuration.
+
+=head2 C<$obj-E<gt>remove()>
+
+Deletes C<$obj> from its database.
+
+=head2 C<$obj-E<gt>replace()>
+
+Replaces C<$obj> in the database. Does the right thing if the driver
+knows how to REPLACE object, ala MySQL.
+
+=head1 USAGE
+
+=head2 C<Class-E<gt>new(%columns)>
+
+Returns a new object of the given class, initializing its columns with the values
+in C<%columns>.
+
+=head2 C<$obj-E<gt>init(%columns)>
+
+Initializes C<$obj>i by initializing its columns with the values in
+C<%columns>.
+
+Override this method if you must do initial configuration to new instances of
+C<$obj>'s class that are not more appropriate as a C<post_load> callback.
+
+=head2 C<Class-E<gt>properties()>
+
+Returns the named object class's properties as a hashref. Note that some of the
+standard object class properties, such as C<primary_key>, have more convenient
+accessors than reading the properties directly.
+
+=head2 C<Class-E<gt>driver()>
+
+Returns the object driver for this class, invoking the class's I<get_driver>
+function (and caching the result for future calls) if necessary. 
+
+=head2 C<Class-E<gt>get_driver($get_driver_fn)>
+
+Sets the function used to find the object driver for I<Class> objects (that is,
+the C<get_driver> property).
+
+Note that once C<driver()> has been called, the C<get_driver> function is not
+used. Usually you would specify your function as the C<get_driver> parameter to
+C<install_properties()>.
+
+=head2 C<Class-E<gt>is_pkless()>
+
+Returns whether the given object class has a primary key defined.
+
+=head2 C<Class-E<gt>is_primary_key($column)>
+
+Returns whether the given column is or is part of the primary key for C<Class>
+objects.
+
+=head2 C<$obj-E<gt>primary_key()>
+
+Returns the I<values> of the primary key fields of C<$obj>.
+
+=head2 C<Class-E<gt>primary_key_tuple()>
+
+Returns the I<names> of the primary key fields of C<Class> objects.
+
+=head2 C<$obj-E<gt>has_primary_key()>
+
+Returns whether the given object has values for all of its primary key fields.
+
+=head2 C<$obj-E<gt>primary_key_to_terms([$id])>
+
+Returns C<$obj>'s primary key as a hashref of values keyed on column names,
+suitable for passing as C<search()> terms. If C<$id> is specified, convert that
+primary key instead of C<$obj>'s.
+
+=head2 C<Class-E<gt>datasource()>
+
+Returns the datasource for objects of class C<Class>. That is, returns the
+C<datasource> property of C<Class>.
+
+=head2 C<Class-E<gt>columns_of_type($type)>
+
+Returns the list of columns in C<Class> objects that hold data of type
+C<$type>, as an arrayref. Columns are of a certain type when they are set that
+way in C<Class>'s C<column_defs> property.
+
+=head2 C<$obj-E<gt>set_values(\%values)>
+
+Sets all the columns of C<$obj> that are members of C<\%values> to the values
+specified there.
+
+=head2 C<$obj-E<gt>set_values_internal(\%values)>
+
+Sets new specified values of C<$obj>, without using any overridden mutator
+methods of C<$obj> and without marking the changed columns changed.
+
+=head2 C<$obj-E<gt>clone()>
 
 Returns a new object of the same class as I<$obj> containing the same data,
 except for primary keys, which are set to C<undef>.
 
-=head2 $obj->clone_all
+=head2 C<$obj-E<gt>clone_all()>
 
 Returns a new object of the same class as I<$obj> containing the same data,
 including all key fields.
 
-=head2 $obj->deflate
+=head2 C<Class-E<gt>has_column($column)>
+
+Returns whether a column named C<$column> exists in objects of class <Class>.
+
+=head2 C<Class-E<gt>column_names()>
+
+Returns the list of columns in C<Class> objects as an arrayref.
+
+=head2 C<$obj-E<gt>column_values()>
+
+Returns the columns and values in the given object as a hashref.
+
+=head2 C<$obj-E<gt>column($column, [$value])>
+
+Returns the value of C<$obj>'s column C<$column>. If C<$value> is specified,
+C<column()> sets the first.
+
+Note the usual way of accessing and mutating column values is through the named
+accessors:
+
+    $obj->column('fred', 'barney');  # possible
+    $obj->fred('barney');            # preferred
+
+=head2 C<$obj-E<gt>is_changed([$column])>
+
+Returns whether any values in C<$obj> have changed. If C<$column> is given,
+returns specifically whether that column has changed.
+
+=head2 C<$obj-E<gt>changed_cols_and_pk()>
+
+Returns the list of all columns that have changed in C<$obj> since it was last
+loaded from or saved to the database, as a list.
+
+=head2 C<$obj-E<gt>changed_cols()>
+
+Returns the list of changed columns in C<$obj> as a list, except for any
+columns in C<$obj>'s primary key (even if they have changed).
+
+=head2 C<Class-E<gt>lookup_multi(\@ids)>
+
+Returns a list (arrayref) of objects as specified by their primary keys.
+
+=head2 C<Class-E<gt>bulk_insert(\@columns, \@data)>
+
+Adds the given data, an arrayref of arrayrefs containing column values in the
+order of column names given in C<\@columns>, as directly to the database as
+C<Class> records.
+
+Note that only some database drivers (for example,
+C<Data::ObjectDriver::Driver::DBD::Pg>) implement the bulk insert operation.
+
+=head2 C<$obj-E<gt>fetch_data()>
+
+Returns the current values from C<$obj> as saved in the database, as a hashref.
+
+=head2 C<$obj-E<gt>refresh()>
+
+Resets the values of C<$obj> from the database. Any unsaved modifications to
+C<$obj> will be lost, and any made meanwhile will be reflected in C<$obj>
+afterward.
+
+=head2 C<$obj-E<gt>column_func($column)>
+
+Creates an accessor/mutator method for column C<$column>, returning it as a
+coderef.
+
+Override this if you need special behavior in all accessor/mutator methods.
+
+=head2 C<$obj-E<gt>deflate()>
 
 Returns a minimal representation of the object, for use in caches where
 you might want to preserve space (like memcached). Can also be overridden
@@ -602,9 +1020,86 @@ by subclasses to store the optimal representation of an object in the
 cache. For example, if you have metadata attached to an object, you might
 want to store that in the cache, as well.
 
-=head2 $class->inflate($deflated)
+=head2 C<Class-E<gt>inflate($deflated)>
 
-Inflates the deflated representation of the object I<$deflated> into a
-proper object in the class I<$class>.
+Inflates the deflated representation of the object I<$deflated> into a proper
+object in the class I<Class>. That is, undoes the operation C<$deflated =
+$obj-E<gt>deflate()> by returning a new object equivalent to C<$obj>.
+
+=head1 DIAGNOSTICS
+
+=over 4
+
+=item * C<Please specify a valid column for I<class>>
+
+One of the class relationships you defined with C<has_a()> was missing a
+C<column> member.
+
+=item * C<Please define a valid method for I<column>>
+
+One of the class relationships you defined with C<has_a()> was missing its
+C<method> member and a method name could not be generated, or the class for
+which you specified the relationship already has a method by that name. Perhaps
+you specified an additional accessor by the same name for that class.
+
+=item * C<keys don't match with primary keys: I<list>>
+
+The hashref of values you passed as the ID to C<primary_key_to_terms()> was
+missing or had extra members. Perhaps you used a full C<column_values()> hash
+instead of only including that class's key fields.
+
+=item * C<You tried to set inexistent column I<column name> to value I<data> on I<class name>>
+
+The hashref you specified to C<set_values()> contained keys that are not
+defined columns for that class of object. Perhaps you invoked it on the wrong
+class, or did not fully filter members of the hash out before using it.
+
+=item * C<Cannot find column 'I<column>' for class 'I<class>'>
+
+The column you specified to C<column()> does not exist for that class, you
+attempted to use an automatically generated accessor/mutator for a column that
+doesn't exist, or attempted to use a column accessor as a class method instead
+of an instance method. Perhaps you performed your call on the wrong class or
+variable, or misspelled a method or column name.
+
+=item * C<Must specify column>
+
+You invoked the C<column_func()> method without specifying a column name.
+Column names are required to create the accessor/mutator function, so it knows
+what data member of the object to use.
+
+=item * C<number (of partitions) is required>
+
+You attempted to define partitioning for a class without specifying the number
+of partitions for that class in the C<number> member. Perhaps your logic for
+determining the number of partitions resulted in C<undef> or 0.
+
+=item * C<get_driver is required>
+
+You attempted to define partitioning for a class without specifying the
+function to find the object driver for a partition ID as the C<get_driver>
+member.
+
+=back
+
+=head1 BUGS AND LIMITATIONS
+
+There are no known bugs in this module.
+
+=head1 SEE ALSO
+
+L<Data::ObjectDriver>, L<Data::ObjectDriver::Driver::DBI>,
+L<Data::ObjectDriver::Driver::SimplePartition>
+
+=head1 LICENSE
+
+I<Data::ObjectDriver> is free software; you may redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=head1 AUTHOR & COPYRIGHT
+
+Except where otherwise noted, I<Data::ObjectDriver> is Copyright 2005-2006
+Six Apart, cpan@sixapart.com. All rights reserved.
 
 =cut
+

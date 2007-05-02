@@ -1,4 +1,4 @@
-# $Id: 34-both.t 232 2006-08-05 23:27:32Z btrott $
+# $Id: 34-both.t 300 2006-11-22 02:02:52Z ykerherve $
 
 use strict;
 
@@ -18,7 +18,7 @@ BEGIN {
     }
 }
 
-plan tests => 42;
+plan tests => 46;
 
 use Recipe;
 use Ingredient;
@@ -157,5 +157,23 @@ ok !$r3->{__cached};
 
 $r3 = Recipe->lookup($recipe->recipe_id);
 ok $r3->{__cached};
+
+## test replace 
+my $to_replace = Recipe->new;
+$to_replace->title('Cake');
+$to_replace->replace;
+ok (my $rid = $to_replace->recipe_id);
+
+my $replaced = Recipe->lookup($rid);
+ok ! $replaced->{__cached};
+
+$to_replace = Recipe->new;
+$to_replace->recipe_id($rid);
+$to_replace->title('Cup Cake');
+$to_replace->replace;
+
+$replaced = Recipe->lookup($rid);
+ok $replaced->{__cached};
+is $replaced->title, 'Cup Cake';
 
 teardown_dbs(qw( global cluster1 cluster2 ));

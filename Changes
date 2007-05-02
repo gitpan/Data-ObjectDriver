@@ -2,6 +2,43 @@
 
 Revision history for Data::ObjectDriver
 
+0.04  2007.05.02
+    - Fixed a bug where single-PK classes were not returning the
+      objects correctly sorted during a lookup_multi.
+    - Added support for MySQL 'REPLACE INTO' syntax with a new
+      $obj->replace() method.
+    - Added a new trigger 'post_inflate'.
+    - Fixed a minor issue (warning) with no_changed_flags in column_func()
+    - Added has_a() construct to build linking methods between classes.
+    - remove() returns number of affected rows, with DBI semantics.
+    - Bulk inserting of data can now be done with the new bulk_insert()
+      Class method.  It uses Postgres' COPY command or MySQL's 
+      multi-value inserts to load data quickly.
+    - The new() constructor for objects now accepts column name/value
+      pairs which are passed to a new init() method.
+    - The new init() method can be called on any object to set
+      many parameters in one call.
+    - This init() method can also be overridden, allowing for custom
+      initialization code.
+    - Added parens around terms within complex SQL conditionals, to allow
+      even more complex conditions to be created.
+    - Made the second argument to D::OD::SQL::add_select optional. It defaults
+      to the value of the first argument (the column name).
+    - Pass along $orig_obj (original object) when calling post_save/post_update
+      triggers, even when the object hasn't changed.
+    - A non-numeric value in a LIMIT now causes an exception.
+    - Fixed a bug where calling SQL->add_join twice would create an invalid
+      SQL statement.
+    - More documentation!
+    - Added more DOD::DBD::* options: sql_for_unixtime, can_delete_with_limit,
+      is_case_insensitive, can_replace, sql_class.
+    - Added an experimental Multiplexer class to direct writes to multiple
+      backend drivers.
+    - Added a generic end_query method, analogous to start_query, which is
+      called after each query. Useful for profiling etc.
+    - Text::SimpleTable is now loaded dynamically so that it's no longer
+      a requirement for D::OD.
+
 0.03  2006.08.05
     - Added an inflate and deflate mechanism to memcached caching. When objects
       are stored in memcached, they are now deflated to a hash reference

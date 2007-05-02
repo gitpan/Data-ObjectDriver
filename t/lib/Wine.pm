@@ -1,15 +1,15 @@
-# $Id: Wine.pm 83 2006-05-04 00:06:36Z sky $
+# $Id: Wine.pm 344 2007-04-03 00:59:13Z ykerherve $
 
 use strict;
 
 package My::BaseObject;
 use base qw/Data::ObjectDriver::BaseObject/;
 
-sub column_names {
+sub install_properties {
     my $this = shift;
-    my $cols = $this->SUPER::column_names(@_);
-    push @$cols, 'rating';
-    $cols;
+    my $props = $this->SUPER::install_properties(@_);
+    $this->install_column('rating');
+    return $props;
 }
 
 package Wine;

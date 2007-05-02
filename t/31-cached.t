@@ -1,7 +1,8 @@
-# $Id: 31-cached.t 232 2006-08-05 23:27:32Z btrott $
+# $Id: 31-cached.t 305 2006-11-28 21:16:42Z ykerherve $
 
 use strict;
 
+use lib 't/lib';  # for Cache::Memory substitute.
 use lib 't/lib/cached';
 
 require 't/lib/db-common.pl';
@@ -15,7 +16,7 @@ BEGIN {
         plan skip_all => 'Tests require Cache::Memory';
     }
 }
-plan tests => 54;
+plan tests => 62;
 
 setup_dbs({
     global   => [ qw( recipes ingredients ) ],
@@ -37,6 +38,10 @@ ok($recipe->save, 'Object updated successfully');
 is($recipe->title, 'My Banana Milkshake', 'Title is My Banana Milkshake');
 
 $tmp = Recipe->lookup($recipe->recipe_id);
+is(ref $tmp, 'Recipe', 'lookup gave us a recipe');
+is($tmp->title, 'My Banana Milkshake', 'Title is My Banana Milkshake');
+## same with a hash lookup
+$tmp = Recipe->lookup({ recipe_id => $recipe->recipe_id });
 is(ref $tmp, 'Recipe', 'lookup gave us a recipe');
 is($tmp->title, 'My Banana Milkshake', 'Title is My Banana Milkshake');
 
@@ -122,6 +127,16 @@ is($all->[0]->name, 'Vanilla Ice Cream', 'lookup_multi results in right order');
 is($all->[1]->name, 'Bananas', 'lookup_multi results in right order');
 is($all->[2]->name, 'Chocolate Chips', 'lookup_multi results in right order');
 
+## lookup_multi using hashes (Same test than above)
+$all = Ingredient->lookup_multi([
+    { recipe_id => $recipe->recipe_id, id => 1 },
+    { recipe_id => $recipe->recipe_id, id => 2 },
+    { recipe_id => $recipe2->recipe_id, id => 1 },
+]);
+is(scalar @$all, 3, 'Got back 3 ingredients from lookup_multi');
+is($all->[0]->name, 'Vanilla Ice Cream', 'lookup_multi results in right order');
+is($all->[1]->name, 'Bananas', 'lookup_multi results in right order');
+is($all->[2]->name, 'Chocolate Chips', 'lookup_multi results in right order');
 
 # fetch_data tests
 my $data = $recipe->fetch_data;
@@ -134,12 +149,19 @@ is_deeply $data,
     { name => "Vanilla Ice Cream", quantity => 1, recipe_id => 1, id => 1 },
     "(Cache) fetch_data - ingredient is cached";
 
-ok($ingredient->remove, 'Ingredient removed successfully');
-ok($ingredient2->remove, 'Ingredient removed successfully');
-ok($ingredient3->remove, 'Ingredient removed successfully');
+is($ingredient->remove, 1, 'Ingredient removed successfully');
+is($ingredient2->remove, 1, 'Ingredient removed successfully');
+# let's remove ingredient3 with Class methods
+eval {
+    Ingredient->remove({ name => 'Chocolate Chips' }, { nofetch => 1 });
+}; 
+ok($@, "nofetch option will make the driver dies if cache is involved");
+
+is(Ingredient->remove({ name => 'Chocolate Chips' }), 1, "Removed with class method");
+ok(! Ingredient->lookup(1), "really deleted");
 
 
-ok($recipe->remove, 'Recipe removed successfully');
-ok($recipe2->remove, 'Recipe removed successfully');
+is($recipe->remove, 1, 'Recipe removed successfully');
+is($recipe2->remove, 1, 'Recipe removed successfully');
 
 teardown_dbs(qw( global ));

@@ -11,7 +11,7 @@ use Test::More;
 unless (eval { require DBD::SQLite }) {
     plan skip_all => 'Tests require DBD::SQLite';
 }
-plan tests => 7;
+plan tests => 13;
 
 setup_dbs({
     global => [ qw( wines ) ],
@@ -47,5 +47,20 @@ my @results = Wine->search({ binchar => "xxx\0yyy"});
 is scalar @results, 1;
 is $results[0]->rating, 4;
 is $results[0]->name, "Saumur Champigny, Le Grand Clos 2001";
+
+## Test Bulk Loading
+Wine->bulk_insert(['name', 'rating'], [['Caymus', 4], ['Thunderbird', 1], ['Stags Leap', 3]]);
+
+my ($result) = Wine->search({name => 'Caymus'});
+ok $result, 'Found Caymus';
+is $result->rating, 4, 'Caymus is a 4';
+
+($result) = Wine->search({name => 'Thunderbird'});
+ok $result, 'Found Thunderbird';
+is $result->rating, 1, 'Thunderbird is a 1';
+
+($result) = Wine->search({name => 'Stags Leap'});
+ok $result, 'Found Stags Leap';
+is $result->rating, 3, 'Stags Leap is a 3';
 
 teardown_dbs(qw( global ));

@@ -1,19 +1,22 @@
 abstract: ''
 author: Six Apart <cpan@sixapart.com>
+build_requires: 
+  Test::Exception: 0
 distribution_type: module
 generated_by: Module::Install version 0.61
 license: perl
 name: Data-ObjectDriver
-no_index:
-  directory:
+no_index: 
+  directory: 
     - t
     - inc
     - t
-requires:
+recommends: 
+  Text::SimpleTable: 0
+requires: 
   Class::Accessor::Fast: 0
   Class::Data::Inheritable: 0
   Class::Trigger: 0
   DBI: 0
   List::Util: 0
-  Text::SimpleTable: 0
-version: 0.03
+version: 0.04

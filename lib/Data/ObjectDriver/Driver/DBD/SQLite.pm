@@ -7,6 +7,9 @@ use base qw( Data::ObjectDriver::Driver::DBD );
 
 use Data::ObjectDriver::Errors;
 
+# yes according to http://www.sqlite.org/lang_replace.html 
+sub can_replace { 1 }
+
 sub fetch_id { $_[2]->func('last_insert_rowid') }
 
 sub bind_param_attributes {
@@ -27,9 +30,32 @@ sub map_error_code {
     if ($msg && $msg =~ /not unique/) {
         return Data::ObjectDriver::Errors->UNIQUE_CONSTRAINT;
     } else {
-        return undef;
+        return;
     }
 }
+
+
+sub bulk_insert {
+    my $dbd = shift;
+    my $dbh = shift;
+    my $table = shift;
+
+    my $cols = shift;
+    my $rows_ref = shift;
+
+    my $sql = "INSERT INTO $table("  . join(',', @{$cols}) . ") VALUES (" . join(',',  map {'?'} @{$cols}) .  ")\n";
+
+    my $sth = $dbh->prepare($sql);
+
+    foreach my $row (@{$rows_ref}) {
+	$sth->execute(@{$row});
+    }
+
+    # For now just write all data, at some point we need to lookup the
+    # maximum packet size for SQL
+    return 1;
+}
+
 
 1;
 

@@ -1,4 +1,4 @@
-# $Id: 50-profiling.t 232 2006-08-05 23:27:32Z btrott $
+# $Id: 50-profiling.t 343 2007-04-03 00:16:46Z ykerherve $
 
 use strict;
 
@@ -34,6 +34,12 @@ $Data::ObjectDriver::PROFILE = 1;
 my $recipe = Recipe->new;
 $recipe->title('Cake');
 $recipe->save;
+
+## disable caching because it makes the test more complicate
+## to understand. Indeed inflate and deflate generates additional
+## queries difficult to account for
+use Data::ObjectDriver::Driver::Cache::Cache;
+Data::ObjectDriver::Driver::Cache::Cache->Disabled(1);
 
 my $profiler = Data::ObjectDriver->profiler;
 
@@ -79,7 +85,12 @@ is $frequent->{"SELECT 1 FROM recipes WHERE (recipes.recipe_id = ?)"}, 2;
 
 is $profiler->total_queries, 5;
 
-like $profiler->report_query_frequency, qr/FROM recipes/;
-like $profiler->report_queries_by_type, qr/SELECT/;
+SKIP: {
+        my $simpletable = eval { require Text::SimpleTable };
+        skip "Text::SimpleTable not installed", 2 unless $simpletable;
+
+        like $profiler->report_query_frequency, qr/FROM recipes/;
+        like $profiler->report_queries_by_type, qr/SELECT/;
+};
 
 teardown_dbs(qw( global cluster1 cluster2 ));

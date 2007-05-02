@@ -1,10 +1,13 @@
-# $Id: Pg.pm 169 2006-05-04 00:15:55Z sky $
+# $Id: Pg.pm 300 2006-11-22 02:02:52Z ykerherve $
 
 package Data::ObjectDriver::Driver::DBD::Pg;
 use strict;
 use warnings;
 
 use base qw( Data::ObjectDriver::Driver::DBD );
+
+# No postgresql doesn't allow MySQL's REPLACE INTO syntax 
+sub can_replace { 1 }
 
 sub init_dbh {
     my $dbd = shift;
@@ -34,6 +37,24 @@ sub fetch_id {
     my($class, $dbh, $sth) = @_;
     $dbh->last_insert_id(undef, undef, undef, undef,
         { sequence => $dbd->sequence_name($class) });
+}
+
+sub bulk_insert {
+    my $dbd = shift;
+    my $dbh = shift;
+    my $table = shift;
+
+    my $cols = shift;
+    my $rows_ref = shift;
+
+    my $sql = "COPY $table (" . join(',', @{$cols}) . ') from stdin';
+
+    $dbh->do($sql);
+    foreach my $row (@{$rows_ref}) {
+        my $line = join("\t", map {$_ || '\N'} @{$row});
+        $dbh->pg_putline($line);
+    }
+    return $dbh->pg_endcopy();
 }
 
 1;

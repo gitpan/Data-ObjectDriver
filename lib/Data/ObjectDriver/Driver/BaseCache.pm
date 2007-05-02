@@ -1,4 +1,4 @@
-# $Id: BaseCache.pm 230 2006-07-20 10:48:55Z btrott $
+# $Id: BaseCache.pm 300 2006-11-22 02:02:52Z ykerherve $
 
 package Data::ObjectDriver::Driver::BaseCache;
 use strict;
@@ -14,6 +14,12 @@ __PACKAGE__->mk_classdata(qw( Disabled ));
 
 sub deflate { $_[1] }
 sub inflate { $_[2] }
+
+# subclasses must override these:
+sub add_to_cache            { Carp::croak("NOT IMPLEMENTED") }
+sub update_cache            { Carp::croak("NOT IMPLEMENTED") }
+sub remove_from_cache       { Carp::croak("NOT IMPLEMENTED") }
+sub get_from_cache          { Carp::croak("NOT IMPLEMENTED") }
 
 sub init {
     my $driver = shift;
@@ -120,7 +126,7 @@ sub lookup_multi {
 }
 
 ## We fallback by default
-sub fetch_data { 
+sub fetch_data {
     my $driver = shift;
     my ($obj) = @_;
     return $driver->fallback->fetch_data($obj);
@@ -139,7 +145,7 @@ sub search {
 
     ## Tell the fallback driver to fetch only the primary columns,
     ## then run the search using the fallback.
-    local $args->{fetchonly} = $class->primary_key_tuple; 
+    local $args->{fetchonly} = $class->primary_key_tuple;
     ## Disable triggers for this load. We don't want the post_load trigger
     ## being called twice.
     $args->{no_triggers} = 1;
@@ -162,13 +168,32 @@ sub update {
     $driver->fallback->update($obj);
 }
 
+sub replace {
+    my $driver = shift;
+    my($obj) = @_;
+    return $driver->fallback->replace($obj)
+        if $driver->Disabled;
+    if (ref $obj && $obj->has_primary_key) {
+        my $key = $driver->cache_key(ref($obj), $obj->primary_key);
+        $driver->update_cache($key, $driver->deflate($obj));
+    } 
+    $driver->fallback->replace($obj);
+}
+
 sub remove {
     my $driver = shift;
     my($obj) = @_;
-    return $driver->fallback->remove($obj)
+    return $driver->fallback->remove(@_)
         if $driver->Disabled;
-    $driver->remove_from_cache($driver->cache_key(ref($obj), $obj->primary_key));
-    $driver->fallback->remove($obj);
+    if (ref $obj) {
+        $driver->remove_from_cache($driver->cache_key(ref($obj), $obj->primary_key));
+    } elsif ($_[2] && $_[2]->{nofetch}) {
+        ## since direct_remove isn't an object method, it can't benefit
+        ## from inheritance, we're forced to keep things a bit obfuscated here
+        ## (I'd rather have a : sub direct_remove { die "unavailable" } in the driver
+        Carp::croak("nofetch option isn't compatible with a cache driver");
+    }
+    $driver->fallback->remove(@_);
 }
 
 sub cache_key {
@@ -189,17 +214,144 @@ sub DESTROY { }
 sub AUTOLOAD {
     my $driver = $_[0];
     (my $meth = our $AUTOLOAD) =~ s/.+:://;
-    no strict 'refs';
     my $fallback = $driver->fallback;
     ## Check for invalid methods, but make sure we still allow
     ## chaining 2 caching drivers together.
     Carp::croak("Cannot call method '$meth' on object '$driver'")
         unless $fallback->can($meth) ||
                UNIVERSAL::isa($fallback, __PACKAGE__);
-    *$AUTOLOAD = sub {
-        shift->fallback->$meth(@_);
-    };
+    {
+        no strict 'refs'; ## no critic
+        *$AUTOLOAD = sub {
+            shift->fallback->$meth(@_);
+        };
+    }
     goto &$AUTOLOAD;
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Data::ObjectDriver::Driver::BaseCache - parent class for caching object drivers
+
+=head1 SYNOPSIS
+
+=head1 DESCRIPTION
+
+Data::ObjectDriver::Driver::BaseCache provides behavior utilized for all
+caching object drivers for use with Data::ObjectDriver. That behavior is
+looking up requested objects in a cache, and falling back to another
+Data::ObjectDriver for a cache miss.
+
+=head1 USAGE
+
+Drivers based on Data::ObjectDriver::Driver::BaseCache support all standard
+operations for Data::ObjectDriver object drivers (lookup, search, update,
+insert, replace, remove, and fetch_data). BaseCache-derived drivers also support:
+
+=head2 C<Data::ObjectDriver::Driver::BaseCache-E<gt>new( %params )>
+
+Creates a new instance of a BaseCache driver. Required members of C<%params> are:
+
+=over 4
+
+=item * C<cache>
+
+The object with which to interface with the external cache. For example, for
+the C<Memcached> caching object driver, the value of the C<cache> member should
+be a C<Cache::Memcached> object.
+
+=item * C<fallback>
+
+The C<Data::ObjectDriver> object driver to which to fall back when the cache
+does not yet contain a requested object. The C<fallback> member is also the
+object driver to which updates and inserts are passed.
+
+=back
+
+=head2 C<$driver-E<gt>cache_key($class, $primary_key)>
+
+Returns the cache key for an object of the given class with the given primary
+key. The cache key is used with the external cache to identify an object.
+
+In BaseCache's implementation, the key is the class name and all the column
+names of the primary key concatenated, separated by single colons. 
+
+=head2 C<$driver-E<gt>get_multi_from_cache(@cache_keys)>
+
+Returns the objects corresponding to the given cache keys, as represented in
+the external cache.
+
+=head2 C<Data::ObjectDriver::Driver::BaseClass-E<gt>Disabled([ $value ])>
+
+Returns whether caches of the given class are disabled, first updating the
+disabled state of drivers of the given class to C<$value>, if given. When a
+caching driver is disabled, all operations are automatically passed through to
+the fallback object driver.
+
+Note that, if you disable and reenable a caching driver, some of the cached
+data may be invalid due to updates that were performed while the driver was
+disabled not being reflected in the external cache.
+
+=head1 SUBCLASSING
+
+When creating a caching driver from C<BaseCache>, the behavior for interaction
+with the external cache (through the C<cache> member of the constructor) must
+be defined by implementing these methods:
+
+=head2 C<$driver-E<gt>add_to_cache($cache_key, $obj_repr)>
+
+Sets the cache entry for C<$cache_key> to the given object representation. This
+method is used when the corresponding object is being saved to the database for
+the first time.
+
+=head2 C<$driver-E<gt>update_cache($cache_key, $obj_repr)>
+
+Sets the cache entry for C<$cache_key> to the given object representation. This
+method is used when the corresponding object already exists in the database and
+is being saved.
+
+=head2 C<$driver-E<gt>remove_from_cache($cache_key)>
+
+Clears the given cache entry. This method is used when the corresponding object
+is being deleted from the database.
+
+=head2 C<$driver-E<gt>get_from_cache($cache_key)>
+
+Returns the object corresponding to the given cache key, as it exists in the
+external cache.
+
+=head2 C<$driver-E<gt>inflate($class, $obj_repr)>
+
+Returns an instance of C<$class> containing the data in the representation
+C<$obj_repr>, as returned from the C<get_from_cache> method.
+
+In BaseCache's implementation, no operation is performed. C<get_from_cache>
+should itself return the appropriate instances of
+C<Data::ObjectDriver::BaseObject>.
+
+=head2 C<$driver-E<gt>deflate($obj)>
+
+Returns a representation of the given C<Data::ObjectDriver::BaseObject>
+instance, suitable for passing to the C<add_to_cache> and C<update_cache>
+methods.
+
+In BaseCache's implementation, no operation is performed. C<add_to_cache> and
+C<update_cache> should themselves accept C<Data::ObjectDriver::BaseObject>
+instances.
+
+=head1 LICENSE
+
+I<Data::ObjectDriver> is free software; you may redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=head1 AUTHOR & COPYRIGHT
+
+Except where otherwise noted, I<Data::ObjectDriver> is Copyright 2005-2006
+Six Apart, cpan@sixapart.com. All rights reserved.
+
+=cut
+

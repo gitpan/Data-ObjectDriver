@@ -1,4 +1,4 @@
-# $Id: 41-callbacks.t 141 2006-05-04 00:12:09Z sky $
+# $Id: 41-callbacks.t 358 2007-05-01 04:33:28Z miyagawa $
 
 use strict;
 
@@ -10,7 +10,8 @@ use Test::More;
 unless (eval { require DBD::SQLite }) {
     plan skip_all => 'Tests require DBD::SQLite';
 }
-plan tests => 23;
+
+plan skip_all => 'This test no longer works with the recent Class::Trigger since it uses undocument API.';
 
 setup_dbs({
     global => [ qw( wines ) ],
@@ -72,7 +73,7 @@ use Wine;
 
 #    Wine->remove_trigger('pre_save'); # doesn't exist
     delete $wine->__triggers->{'pre_save'};
-    $wine->remove;
+    is $wine->remove, 1, 'Remove correct number or rows';
 };
 
 ## test pre_search
@@ -89,7 +90,7 @@ use Wine;
     ok $wine;
     cmp_ok $wine->rating, '==', 10, "object has still the same rating";
     cmp_ok $wine->name, 'eq', 'I will change rating', "indeed";
-    $wine->remove;
+    is $wine->remove, 1, 'Remove correct number of rows';
 
 #    Wine->remove_trigger('pre_search'); # doesn't exist
     delete $wine->__triggers->{'pre_search'};

@@ -1,9 +1,9 @@
-# $Id: 11-sql.t 216 2006-06-07 19:38:15Z btrott $
+# $Id: 11-sql.t 319 2007-01-22 21:06:50Z btrott $
 
 use strict;
 
 use Data::ObjectDriver::SQL;
-use Test::More tests => 53;
+use Test::More tests => 58;
 
 my $stmt = ns();
 ok($stmt, 'Created SQL object');
@@ -34,6 +34,26 @@ $stmt->add_join(foo => [
           condition => 'foo.baz_id = b2.baz_id AND b2.quux_id = 2' },
     ]);
 is $stmt->as_sql, "FROM foo INNER JOIN baz b1 ON foo.baz_id = b1.baz_id AND b1.quux_id = 1 LEFT JOIN baz b2 ON foo.baz_id = b2.baz_id AND b2.quux_id = 2\n";
+
+# test case for bug found where add_join is called twice
+$stmt->joins([]);
+$stmt->add_join(foo => [
+        { type => 'inner', table => 'baz b1',
+          condition => 'foo.baz_id = b1.baz_id AND b1.quux_id = 1' },
+]);
+$stmt->add_join(foo => [
+        { type => 'left', table => 'baz b2',
+          condition => 'foo.baz_id = b2.baz_id AND b2.quux_id = 2' },
+    ]);
+is $stmt->as_sql, "FROM foo INNER JOIN baz b1 ON foo.baz_id = b1.baz_id AND b1.quux_id = 1 LEFT JOIN baz b2 ON foo.baz_id = b2.baz_id AND b2.quux_id = 2\n";
+
+# test case adding another table onto the whole mess
+$stmt->add_join(quux => [
+        { type => 'inner', table => 'foo f1',
+          condition => 'f1.quux_id = quux.q_id'}
+    ]);
+
+is $stmt->as_sql, "FROM foo INNER JOIN baz b1 ON foo.baz_id = b1.baz_id AND b1.quux_id = 1 LEFT JOIN baz b2 ON foo.baz_id = b2.baz_id AND b2.quux_id = 2 INNER JOIN foo f1 ON f1.quux_id = quux.q_id\n";
 
 ## Testing GROUP BY
 $stmt = ns();
@@ -83,8 +103,11 @@ $stmt->limit(5);
 is($stmt->as_sql, "FROM foo\nLIMIT 5\n");
 $stmt->offset(10);
 is($stmt->as_sql, "FROM foo\nLIMIT 5 OFFSET 10\n");
-$stmt->limit("  15g");  ## Non-numerics should be stripped.
-is($stmt->as_sql, "FROM foo\nLIMIT 15 OFFSET 10\n");
+$stmt->limit("  15g");  ## Non-numerics should cause an error
+{
+    my $sql = eval { $stmt->as_sql };
+    like($@, qr/Non-numerics/, "bogus limit causes as_sql assertion");
+}
 
 ## Testing WHERE
 $stmt = ns(); $stmt->add_where(foo => 'bar');
@@ -103,6 +126,11 @@ is($stmt->as_sql_where, "WHERE (foo != ?)\n");
 is(scalar @{ $stmt->bind }, 1);
 is($stmt->bind->[0], 'bar');
 
+$stmt = ns(); $stmt->add_where(foo => { column => 'bar', op => '!=', value => 'bar' });
+is($stmt->as_sql_where, "WHERE (bar != ?)\n");
+is(scalar @{ $stmt->bind }, 1);
+is($stmt->bind->[0], 'bar');
+
 $stmt = ns(); $stmt->add_where(foo => \'IS NOT NULL');
 is($stmt->as_sql_where, "WHERE (foo IS NOT NULL)\n");
 is(scalar @{ $stmt->bind }, 0);
@@ -118,7 +146,7 @@ is($stmt->bind->[1], 'quux');
 $stmt = ns();
 $stmt->add_where(foo => [ { op => '>', value => 'bar' },
                           { op => '<', value => 'baz' } ]);
-is($stmt->as_sql_where, "WHERE (foo > ? OR foo < ?)\n");
+is($stmt->as_sql_where, "WHERE ((foo > ?) OR (foo < ?))\n");
 is(scalar @{ $stmt->bind }, 2);
 is($stmt->bind->[0], 'bar');
 is($stmt->bind->[1], 'baz');
@@ -126,14 +154,14 @@ is($stmt->bind->[1], 'baz');
 $stmt = ns();
 $stmt->add_where(foo => [ -and => { op => '>', value => 'bar' },
                                   { op => '<', value => 'baz' } ]);
-is($stmt->as_sql_where, "WHERE (foo > ? AND foo < ?)\n");
+is($stmt->as_sql_where, "WHERE ((foo > ?) AND (foo < ?))\n");
 is(scalar @{ $stmt->bind }, 2);
 is($stmt->bind->[0], 'bar');
 is($stmt->bind->[1], 'baz');
 
 $stmt = ns();
 $stmt->add_where(foo => [ -and => 'foo', 'bar', 'baz']);
-is($stmt->as_sql_where, "WHERE (foo = ? AND foo = ? AND foo = ?)\n");
+is($stmt->as_sql_where, "WHERE ((foo = ?) AND (foo = ?) AND (foo = ?))\n");
 is(scalar @{ $stmt->bind }, 3);
 is($stmt->bind->[0], 'foo');
 is($stmt->bind->[1], 'bar');
@@ -143,13 +171,13 @@ is($stmt->bind->[2], 'baz');
 my %terms = ( foo => [-and => 'foo', 'bar', 'baz']);
 $stmt = ns();
 $stmt->add_where(%terms);
-is($stmt->as_sql_where, "WHERE (foo = ? AND foo = ? AND foo = ?)\n");
+is($stmt->as_sql_where, "WHERE ((foo = ?) AND (foo = ?) AND (foo = ?))\n");
 $stmt->add_where(%terms);
-is($stmt->as_sql_where, "WHERE (foo = ? AND foo = ? AND foo = ?) AND (foo = ? AND foo = ? AND foo = ?)\n");
+is($stmt->as_sql_where, "WHERE ((foo = ?) AND (foo = ?) AND (foo = ?)) AND ((foo = ?) AND (foo = ?) AND (foo = ?))\n");
 
 $stmt = ns();
 $stmt->add_select(foo => 'foo');
-$stmt->add_select(bar => 'bar');
+$stmt->add_select('bar');
 $stmt->from([ qw( baz ) ]);
 is($stmt->as_sql, "SELECT foo, bar\nFROM baz\n");
 
@@ -183,5 +211,5 @@ HAVING (COUNT(*) = ?)
 ORDER BY foo DESC
 LIMIT 2
 SQL
-    
+
 sub ns { Data::ObjectDriver::SQL->new }

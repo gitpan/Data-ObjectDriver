@@ -1,4 +1,4 @@
-# $Id: ObjectDriver.pm 231 2006-07-20 23:55:14Z btrott $
+# $Id: ObjectDriver.pm 361 2007-05-02 04:45:44Z btrott $
 
 package Data::ObjectDriver;
 use strict;
@@ -11,7 +11,7 @@ use Data::ObjectDriver::Profiler;
 
 __PACKAGE__->mk_accessors(qw( pk_generator ));
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 our $DEBUG = $ENV{DOD_DEBUG} || 0;
 our $PROFILE = $ENV{DOD_PROFILE} || 0;
 our $PROFILER = Data::ObjectDriver::Profiler->new;
@@ -32,25 +32,40 @@ sub init {
     $driver;
 }
 
-sub record_query {
+# Alias record_query to start_query
+*record_query = \*start_query;
+
+sub start_query {
     my $driver = shift;
     my($sql, $bind) = @_;
-    if ($DEBUG) {
-        $driver->debug($sql, $bind);
-    }
-    if ($PROFILE) {
-        $PROFILER->record_query($driver, $sql);
-    }
+
+    $driver->debug($sql, $bind) if $DEBUG;
+    $PROFILER->record_query($driver, $sql) if $PROFILE;
+
+    return;
 }
+
+sub end_query { }
 
 sub debug {
     my $driver = shift;
     return unless $DEBUG;
+
+    my $class = ref $driver;
+    my @caller;
+    my $i = 0;
+    while (1) {
+        @caller = caller($i++);
+        last if $caller[0] !~ /^(Data::ObjectDriver|$driver)/;
+    }
+
+    my $where = " in file $caller[1] line $caller[2]\n";
+
     if (@_ == 1 && !ref($_[0])) {
-        print STDERR @_;
+        print STDERR @_, $where;
     } else {
         local $Data::Dumper::Indent = 1;
-        print STDERR Data::Dumper::Dumper(@_);
+        print STDERR Data::Dumper::Dumper(@_), $where;
     }
 }
 
@@ -125,6 +140,11 @@ Data::ObjectDriver - Simple, transparent data interface, with caching
     ## Needs more bananas!
     $ingredient->quantity(10);
     $ingredient->save;
+
+    ## Shorthand constructor
+    my $ingredient = Ingredient->new(recipe_id=> $recipe->id,
+                                     name => 'Milk',
+                                     quantity => 2);
 
 =head1 DESCRIPTION
 
@@ -272,7 +292,7 @@ Looks up/retrieves multiple objects with the IDs I<\@ids>, which should be
 a reference to an array of IDs. As in the case of I<lookup>, an ID can
 be either a scalar or a reference to an array.
 
-Returns a reference to an array of objects in the same order as the IDs
+Returns a reference to an array of objects B<in the same order> as the IDs
 you passed in. Any objects that could not successfully be loaded will be
 represented in that array as an C<undef> element.
 
@@ -403,6 +423,11 @@ This might be much faster and useful for tables without Primary Key,
 but beware that in this case B<Triggers won't be fired> because no
 objects are instanciated.
 
+=head2 Class->bulk_insert([col1, col2], [[d1,d2], [d1,d2]]);
+
+Bulk inserts data into the underlying table.  The first argument
+is an array reference of columns names as specified in install_properties
+
 =head2 $obj->add_trigger($trigger, \&callback)
 
 Adds a trigger to the object I<$obj>, such that when the event I<$trigger>
@@ -485,6 +510,10 @@ Note that the invocation of callbacks is the responsibility of the object
 driver. If you implement a driver that does not delegate to
 I<Data::ObjectDriver::Driver::DBI>, it is I<your> responsibility to invoke the
 appropriate callbacks with the I<call_trigger> method.
+
+=back
+
+=back
 
 =head1 PROFILING
 
