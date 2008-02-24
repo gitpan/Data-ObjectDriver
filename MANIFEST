@@ -1,6 +1,5 @@
 Build.PL
 Changes
-inc/ExtUtils/AutoInstall.pm
 inc/Module/AutoInstall.pm
 inc/Module/Install.pm
 inc/Module/Install/AutoInstall.pm
@@ -32,7 +31,9 @@ lib/Data/ObjectDriver/Driver/Multiplexer.pm
 lib/Data/ObjectDriver/Driver/Partition.pm
 lib/Data/ObjectDriver/Driver/SimplePartition.pm
 lib/Data/ObjectDriver/Errors.pm
+lib/Data/ObjectDriver/Iterator.pm
 lib/Data/ObjectDriver/Profiler.pm
+lib/Data/ObjectDriver/ResultSet.pm
 lib/Data/ObjectDriver/SQL.pm
 Makefile.PL
 MANIFEST			This list of files
@@ -47,6 +48,7 @@ t/05-deflate.t
 t/06-errors.t
 t/07-has-a-cached.t
 t/07-has-a.t
+t/08-iterator.t
 t/11-sql.t
 t/20-driver-sqlite.t
 t/31-cached.t

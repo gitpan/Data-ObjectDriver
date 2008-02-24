@@ -1,20 +1,25 @@
-# $Id: BaseObject.pm 357 2007-05-01 04:27:29Z miyagawa $
+# $Id: BaseObject.pm 457 2008-02-24 22:09:29Z btrott $
 
 package Data::ObjectDriver::BaseObject;
 use strict;
 use warnings;
 
-use Scalar::Util qw(weaken);
+our $HasWeaken;
+eval "use Scalar::Util qw(weaken)";
+$HasWeaken = !$@;
+
 use Carp ();
 
 use Class::Trigger qw( pre_save post_save post_load pre_search
                        pre_insert post_insert pre_update post_update
                        pre_remove post_remove post_inflate );
 
+use Data::ObjectDriver::ResultSet;
+
 sub install_properties {
     my $class = shift;
     my($props) = @_;
-    my $columns = delete $props->{columns}; 
+    my $columns = delete $props->{columns};
     $props->{columns} = [];
     {
         no strict 'refs'; ## no critic
@@ -110,8 +115,11 @@ sub has_a {
                     ;
                 ## Hold in a variable here too, so we don't lose it immediately
                 ## by having only the weak reference.
-                my $ret = $obj->{$cachekey} = $parentclass->lookup($id);
-                weaken $obj->{$cachekey};
+                my $ret = $parentclass->lookup($id);
+                if ($HasWeaken) {
+                    $obj->{$cachekey} = $ret;
+                    weaken($obj->{$cachekey});
+                }
                 return $ret;
             };
         } else {
@@ -441,6 +449,19 @@ sub lookup_multi {
         $driver->cache_object($obj) if $obj;
     }
     $objs;
+}
+
+sub result {
+    my $class = shift;
+    my ($terms, $args) = @_;
+
+    return Data::ObjectDriver::ResultSet->new({
+                          class     => (ref $class || $class),
+                          page_size => delete $args->{page_size},
+                          paging    => delete $args->{no_paging},
+                          terms     => $terms,
+                          args      => $args,
+                          });
 }
 
 sub search {
@@ -822,6 +843,12 @@ C<SELECT> query will include a C<FOR UPDATE> clause.
 All options are passed to the object driver, so your driver may support
 additional options.
 
+=head2 C<Class-E<gt>result(\%terms, [\%args])>
+
+Takes the same I<%terms> and I<%args> arguments that I<search> takes, but
+instead of executing the query immediately, returns a
+I<Data::ObjectDriver::ResultSet> object representing the set of results.
+
 =head2 C<$obj-E<gt>exists()>
 
 Returns true if C<$obj> already exists in the database.
@@ -875,7 +902,7 @@ accessors than reading the properties directly.
 =head2 C<Class-E<gt>driver()>
 
 Returns the object driver for this class, invoking the class's I<get_driver>
-function (and caching the result for future calls) if necessary. 
+function (and caching the result for future calls) if necessary.
 
 =head2 C<Class-E<gt>get_driver($get_driver_fn)>
 

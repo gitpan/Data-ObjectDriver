@@ -1,4 +1,4 @@
-# $Id: DBI.pm 362 2007-05-02 04:46:44Z btrott $
+# $Id: DBI.pm 420 2007-11-30 00:56:58Z bchoate $
 
 package Data::ObjectDriver::Driver::DBI;
 use strict;
@@ -11,6 +11,7 @@ use Carp ();
 use Data::ObjectDriver::Errors;
 use Data::ObjectDriver::SQL;
 use Data::ObjectDriver::Driver::DBD;
+use Data::ObjectDriver::Iterator;
 
 __PACKAGE__->mk_accessors(qw( dsn username password connect_options dbh get_dbh dbd prefix ));
 
@@ -24,7 +25,7 @@ sub init {
         ## Create a DSN-specific driver (e.g. "mysql").
         my $type;
         if (my $dsn = $driver->dsn) {
-            ($type) = $dsn =~ /^dbi:(\w*)/;
+            ($type) = $dsn =~ /^dbi:(\w*)/i;
         } elsif (my $dbh = $driver->dbh) {
             $type = $dbh->{Driver}{Name};
         } elsif (my $getter = $driver->get_dbh) {
@@ -48,15 +49,13 @@ sub init_db {
     my $driver = shift;
     my $dbh;
     eval {
-        local $SIG{ALRM} = sub { die "alarm\n" };
         $dbh = DBI->connect($driver->dsn, $driver->username, $driver->password,
             { RaiseError => 1, PrintError => 0, AutoCommit => 1,
               %{$driver->connect_options || {}} })
             or Carp::croak("Connection error: " . $DBI::errstr);
-        alarm 0;
     };
     if ($@) {
-        Carp::croak(@$ eq "alarm\n" ? "Connection timeout" : $@);
+        Carp::croak($@);
     }
     $driver->dbd->init_dbh($dbh);
     $driver->{__dbh_init_by_driver} = 1;
@@ -72,7 +71,7 @@ sub rw_handle {
         if (my $getter = $driver->get_dbh) {
             $dbh = $getter->();
         } else {
-            $dbh = $driver->init_db($db) or die $driver->errstr;
+            $dbh = $driver->init_db($db) or die $driver->last_error;
             $driver->dbh($dbh);
         }
     }
@@ -99,7 +98,7 @@ sub fetch {
     my($rec, $class, $orig_terms, $orig_args) = @_;
 
     ## Use (shallow) duplicates so the pre_search trigger can modify them.
-    my $terms = defined $orig_terms ? { %$orig_terms } : undef;
+    my $terms = defined $orig_terms ? ( ref $orig_terms eq 'ARRAY' ? [ @$orig_terms ] : { %$orig_terms } ) : undef;
     my $args  = defined $orig_args  ? { %$orig_args  } : undef;
     $class->call_trigger('pre_search', $terms, $args);
 
@@ -115,7 +114,7 @@ sub fetch {
     $sql .= "\nFOR UPDATE" if $orig_args->{for_update};
     my $dbh = $driver->r_handle($class->properties->{db});
     $driver->start_query($sql, $stmt->{bind});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $orig_args->{no_cached_prepare} ? $dbh->prepare($sql) : $dbh->prepare_cached($sql);
     $sth->execute(@{ $stmt->{bind} });
     $sth->bind_columns(undef, @bind);
 
@@ -126,8 +125,7 @@ sub fetch {
         }
     }
 
-    # TBD what happens if $sth goes out of scope without finish() being called ?
-    $sth;
+    return $sth;
 }
 
 sub search {
@@ -156,6 +154,10 @@ sub search {
         $obj->call_trigger('post_load') unless $args->{no_triggers};
         $obj;
     };
+    my $iterator = Data::ObjectDriver::Iterator->new(
+        $iter, sub { $sth->finish; $driver->end_query($sth) },
+    );
+
     if (wantarray) {
         my @objs = ();
 
@@ -164,7 +166,7 @@ sub search {
         }
         return @objs;
     } else {
-        return $iter;
+        return $iterator;
     }
     return;
 }
@@ -189,7 +191,7 @@ sub lookup_multi {
         my $terms = $class->primary_key_to_terms([ $ids ]);
         my @sqlgot = $driver->search($class, $terms, { is_pk => 1 });
         my %hgot = map { $_->primary_key() => $_ } @sqlgot;
-        @got = map { $hgot{$_} } @$ids;
+        @got = map { defined $_ ? $hgot{$_} : undef } @$ids;
     } else {
         for my $id (@$ids) {
             push @got, $class->driver->lookup($class, $id);
@@ -427,8 +429,8 @@ sub remove {
             my $result = 0;
             my @obj = $driver->search($orig_obj, @_);
             for my $obj (@obj) {
-                $result ++;
-                $obj->remove;
+                my $res = $obj->remove(@_) || 0;
+                $result += $res;
             }
             return $result || 0E0;
         }
@@ -461,8 +463,8 @@ sub direct_remove {
     my($class, $orig_terms, $orig_args) = @_;
 
     ## Use (shallow) duplicates so the pre_search trigger can modify them.
-    my $terms = defined $orig_terms ? { %$orig_terms } : undef;
-    my $args  = defined $orig_args  ? { %$orig_args  } : undef;
+    my $terms = defined $orig_terms ? { %$orig_terms } : {};
+    my $args  = defined $orig_args  ? { %$orig_args  } : {};
     $class->call_trigger('pre_search', $terms, $args);
 
     my $stmt = $driver->prepare_statement($class, $terms, $args);
@@ -589,9 +591,21 @@ sub prepare_statement {
         $stmt->from([ $tbl ]);
 
         if (defined($terms)) {
-            for my $col (keys %$terms) {
-                my $db_col = $dbd->db_column_name($tbl, $col);
-                $stmt->add_where(join('.', $tbl, $db_col), $terms->{$col});
+            if (ref $terms eq 'ARRAY') {
+                # Used for translating property names deep within the
+                # $terms structure to column names
+                $stmt->column_mutator(sub {
+                    my ($col) = @_;
+                    return $dbd->db_column_name($tbl, $col);
+                });
+                $stmt->add_complex_where($terms);
+                $stmt->column_mutator(undef);
+            }
+            else {
+                for my $col (keys %$terms) {
+                    my $db_col = $dbd->db_column_name($tbl, $col);
+                    $stmt->add_where(join('.', $tbl, $db_col), $terms->{$col});
+                }
             }
         }
 

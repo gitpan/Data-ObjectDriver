@@ -1,4 +1,4 @@
-# $Id: Partition.pm 336 2007-02-20 23:33:37Z ykerherve $
+# $Id: Partition.pm 379 2007-06-20 23:57:08Z garth $
 
 package Data::ObjectDriver::Driver::Partition;
 use strict;
@@ -24,8 +24,8 @@ sub lookup {
 
 sub lookup_multi {
     my $driver = shift;
-    my($class, @ids) = @_;
-    $driver->get_driver->($ids[0])->lookup_multi($class, @ids);
+    my($class, $ids) = @_;
+    $driver->get_driver->($ids->[0])->lookup_multi($class, $ids);
 }
 
 sub exists     { shift->_exec_partitioned('exists',     @_) }
@@ -47,8 +47,11 @@ sub _exec_partitioned {
     ## If called as a class method, pass in the stuff in @rest.
     my $d;
     if (ref($obj)) {
-        my $arg = $obj->column_values;
-        $d = $driver->get_driver->($arg, @rest);
+        my $terms = $obj->column_values;
+        # @rest should only contain $args, but just in case
+        # don't assume we have nothing else and build @rest2
+        (undef, my @rest2) = @rest;
+        $d = $driver->get_driver->($terms, @rest2);
     } else {
         $d = $driver->get_driver->(@rest);
     }

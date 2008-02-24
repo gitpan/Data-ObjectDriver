@@ -1,4 +1,4 @@
-# $Id: 35-multiplexed.t 327 2007-01-30 22:53:27Z ykerherve $
+# $Id: 35-multiplexed.t 371 2007-05-30 16:54:51Z ykerherve $
 
 use strict;
 
@@ -51,7 +51,7 @@ SQL
 
 _check_object($obj);
 
-is(Ingredient2Recipe->remove({ ingredient_id => 1, recipe_id => 5 }, { nofetch => 1 }), 2, 'Removed 2 records');
+is(Ingredient2Recipe->remove({ ingredient_id => 1, recipe_id => 5 }, { nofetch => 1 }), 2, 'Removed 2 records for 1 object');
 
 for my $driver (@{ Ingredient2Recipe->driver->drivers }) {
     my $ok = !$driver->select_one(<<SQL, [ 1, 5 ]);

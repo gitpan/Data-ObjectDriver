@@ -1,4 +1,4 @@
-# $Id: ObjectDriver.pm 361 2007-05-02 04:45:44Z btrott $
+# $Id: ObjectDriver.pm 456 2008-02-24 22:06:01Z btrott $
 
 package Data::ObjectDriver;
 use strict;
@@ -6,23 +6,32 @@ use warnings;
 use Class::Accessor::Fast;
 
 use base qw( Class::Accessor::Fast );
-
-use Data::ObjectDriver::Profiler;
+use Data::ObjectDriver::Iterator;
 
 __PACKAGE__->mk_accessors(qw( pk_generator ));
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 our $DEBUG = $ENV{DOD_DEBUG} || 0;
 our $PROFILE = $ENV{DOD_PROFILE} || 0;
-our $PROFILER = Data::ObjectDriver::Profiler->new;
-
-use Data::Dumper ();
+our $PROFILER;
+our $LOGGER;
 
 sub new {
     my $class = shift;
     my $driver = bless {}, $class;
     $driver->init(@_);
     $driver;
+}
+
+sub logger {
+    my $class = shift;
+    if ( @_ ) {
+        return $LOGGER = shift;
+    } else {
+        return $LOGGER ||= sub {
+            print STDERR @_;
+        };
+    }
 }
 
 sub init {
@@ -40,7 +49,7 @@ sub start_query {
     my($sql, $bind) = @_;
 
     $driver->debug($sql, $bind) if $DEBUG;
-    $PROFILER->record_query($driver, $sql) if $PROFILE;
+    $driver->profiler($sql) if $PROFILE;
 
     return;
 }
@@ -51,26 +60,35 @@ sub debug {
     my $driver = shift;
     return unless $DEBUG;
 
-    my $class = ref $driver;
+    my $class = ref $driver || $driver;
     my @caller;
     my $i = 0;
     while (1) {
         @caller = caller($i++);
-        last if $caller[0] !~ /^(Data::ObjectDriver|$driver)/;
+        last if $caller[0] !~ /^(Data::ObjectDriver|$class)/;
     }
 
     my $where = " in file $caller[1] line $caller[2]\n";
 
     if (@_ == 1 && !ref($_[0])) {
-        print STDERR @_, $where;
+        $driver->logger->( @_, $where );
     } else {
+        require Data::Dumper;
         local $Data::Dumper::Indent = 1;
-        print STDERR Data::Dumper::Dumper(@_), $where;
+        $driver->logger->( Data::Dumper::Dumper(@_), $where );
     }
 }
 
 sub profiler {
-    return $PROFILER;
+    my $driver = shift;
+    my ($sql) = @_;
+    $PROFILER ||= eval {
+        require Data::ObjectDriver::Profiler;
+        Data::ObjectDriver::Profiler->new;
+    };
+    return $PROFILE = 0 if $@ || !$PROFILER;
+    return $PROFILER unless @_;
+    $PROFILER->record_query($driver, $sql);
 }
 
 sub list_or_iterator {
@@ -82,7 +100,8 @@ sub list_or_iterator {
     if (wantarray) {
         return @{$objs};
     } else {
-        return sub { shift @{$objs} };
+        my $iter = sub { shift @{$objs} };
+        return Data::ObjectDriver::Iterator->new($iter);
     }
 }
 
@@ -209,7 +228,7 @@ to the driver listed in the I<fallback> setting: the partitioning layer.
 =item 2.
 
 The partitioning layer does not know how to look up objects by itself--all
-it knows how to do is to give back a driver that I<does> know how to loko
+it knows how to do is to give back a driver that I<does> know how to look
 up objects in a backend datastore.
 
 In our example above, imagine that we're partitioning our ingredient data
@@ -325,6 +344,14 @@ a subroutine that acts as an iterator object, like so:
         ...
     }
 
+C<$iter> is blessed in L<Data::ObjectDriver::Iterator> package, so the above
+could also be written:
+
+    my $iter = Ingredient->search({ recipe_id => 5 });
+    while (my $ingredient = $iter->next()) {
+        ...
+    }
+
 The keys in I<%terms> should be column names for the database table
 modeled by I<Class> (and the values should be the desired values for those
 columns).
@@ -370,6 +397,20 @@ If set to a true value, the I<SELECT> statement generated will include a
 I<FOR UPDATE> clause.
 
 =back
+
+=head2 Class->search(\@terms [, \%options ])
+
+This is an alternative calling signature for the search method documented
+above. When providing an array of terms, it allows for constructing complex
+expressions that mix 'and' and 'or' clauses. For example:
+
+    my $iter = Ingredient->search([ { recipe_id => 5 },
+        -or => { calories => { value => 300, op => '<' } } ]);
+    while (my $ingredient = $iter->()) {
+        ...
+    }
+
+Supported logic operators are: '-and', '-or', '-and_not', '-or_not'.
 
 =head2 Class->add_trigger($trigger, \&callback)
 

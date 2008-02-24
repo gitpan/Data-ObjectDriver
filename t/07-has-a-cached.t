@@ -17,6 +17,9 @@ BEGIN {
     unless (eval { require Cache::Memory }) {
         plan skip_all => 'Tests require Cache::Memory';
     }
+    unless (eval 'use Scalar::Util qw(weaken); 1') {
+        plan skip_all => 'Tests require weakref';
+    }
 }
 
 plan tests => 3;

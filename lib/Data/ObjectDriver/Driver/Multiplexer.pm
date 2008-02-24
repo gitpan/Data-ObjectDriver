@@ -1,4 +1,4 @@
-# $Id: Multiplexer.pm 346 2007-04-04 21:22:42Z ykerherve $
+# $Id: Multiplexer.pm 396 2007-08-12 23:53:29Z ykerherve $
 
 package Data::ObjectDriver::Driver::Multiplexer;
 use strict;
@@ -28,6 +28,14 @@ sub lookup {
     croak "on_lookup is not defined in $driver"
         unless $subdriver;
     return $subdriver->lookup(@_);
+}
+
+sub fetch_data { 
+    my $driver = shift;
+    my $subdriver = $driver->on_lookup;
+    croak "on_lookup is not defined in $driver"
+        unless $subdriver;
+    return $subdriver->fetch_data(@_);
 }
 
 sub lookup_multi {
@@ -60,19 +68,14 @@ sub update  { shift->_exec_multiplexed('update',  @_) }
 
 sub remove {
     my $driver = shift;
-    my(@stuff) = @_;
-    my $stuff = $stuff[0];
-    my $terms = $stuff[1];
-    if (ref $stuff) {
-        ## hackish... use on_search as a to_hash() method 
-        $terms = { map { $_ => $stuff->$_() } keys %{ $driver->on_search } };
-    }
     my $removed = 0;
-    for my $key (keys %{ $terms }) {
-        my $sub_driver = $driver->on_search->{$key} or next;
-        $removed += $sub_driver->remove(@stuff);
+    for my $sub_driver (@{ $driver->drivers }) {
+        $removed += $sub_driver->remove(@_);
     }
-    return $removed;
+    if ($removed % 2) {
+        warn "remove count looks incorrect, we might miss one object";
+    }
+    return $removed || 0E0;
 }
 
 sub _find_sub_driver {

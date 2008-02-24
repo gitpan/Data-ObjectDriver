@@ -8,7 +8,6 @@ author('Six Apart <cpan@sixapart.com>');
 version_from('lib/Data/ObjectDriver.pm');
 license('perl');
 no_index(directory => 't');
-sign(1);
 
 include('ExtUtils::AutoInstall');
 

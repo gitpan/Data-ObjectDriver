@@ -1,4 +1,4 @@
-# $Id: BaseCache.pm 300 2006-11-22 02:02:52Z ykerherve $
+# $Id: BaseCache.pm 404 2007-08-30 20:21:58Z ykerherve $
 
 package Data::ObjectDriver::Driver::BaseCache;
 use strict;
@@ -51,6 +51,7 @@ sub cache_object {
 sub lookup {
     my $driver = shift;
     my($class, $id) = @_;
+    return unless defined $id;
     return $driver->fallback->lookup($class, $id)
         if $driver->Disabled;
     my $key = $driver->cache_key($class, $id);
@@ -84,7 +85,7 @@ sub lookup_multi {
     return $driver->fallback->lookup_multi($class, $ids)
         if $driver->Disabled;
 
-    my %id2key = map { $_ => $driver->cache_key($class, $_) } @$ids;
+    my %id2key = map { $_ => $driver->cache_key($class, $_) } grep { defined } @$ids;
     my $got = $driver->get_multi_from_cache(values %id2key);
 
     ## If we got back all of the objects from the cache, return immediately.
@@ -102,7 +103,7 @@ sub lookup_multi {
     ## and fall back to the backend to look up those objects.
     my($i, @got, @need, %need2got) = (0);
     for my $id (@$ids) {
-        if (my $obj = $got->{ $id2key{$id} }) {
+        if (defined $id && (my $obj = $got->{ $id2key{$id} })) {
             $obj = $driver->inflate($class, $obj);
             $obj->{__cached}{ref $driver} = 1;
             push @got, $obj;
@@ -163,9 +164,10 @@ sub update {
     my($obj) = @_;
     return $driver->fallback->update($obj)
         if $driver->Disabled;
+    my $ret = $driver->fallback->update($obj);
     my $key = $driver->cache_key(ref($obj), $obj->primary_key);
     $driver->update_cache($key, $driver->deflate($obj));
-    $driver->fallback->update($obj);
+    return $ret;
 }
 
 sub replace {
@@ -173,11 +175,15 @@ sub replace {
     my($obj) = @_;
     return $driver->fallback->replace($obj)
         if $driver->Disabled;
-    if (ref $obj && $obj->has_primary_key) {
+
+    # Collect this logic before $obj changes on the next line via 'replace'
+    my $has_pk = ref $obj && $obj->has_primary_key;
+    my $ret = $driver->fallback->replace($obj);
+    if ($has_pk) {
         my $key = $driver->cache_key(ref($obj), $obj->primary_key);
         $driver->update_cache($key, $driver->deflate($obj));
     } 
-    $driver->fallback->replace($obj);
+    return $ret;
 }
 
 sub remove {
@@ -185,13 +191,15 @@ sub remove {
     my($obj) = @_;
     return $driver->fallback->remove(@_)
         if $driver->Disabled;
-    if (ref $obj) {
-        $driver->remove_from_cache($driver->cache_key(ref($obj), $obj->primary_key));
-    } elsif ($_[2] && $_[2]->{nofetch}) {
+
+    if ($_[2] && $_[2]->{nofetch}) {
         ## since direct_remove isn't an object method, it can't benefit
         ## from inheritance, we're forced to keep things a bit obfuscated here
         ## (I'd rather have a : sub direct_remove { die "unavailable" } in the driver
         Carp::croak("nofetch option isn't compatible with a cache driver");
+    }
+    if (ref $obj) {
+        $driver->remove_from_cache($driver->cache_key(ref($obj), $obj->primary_key));
     }
     $driver->fallback->remove(@_);
 }
