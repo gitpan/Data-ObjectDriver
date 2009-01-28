@@ -1,4 +1,4 @@
-# $Id: 04-clone.t 111 2006-05-04 00:09:02Z sky $
+# $Id: 04-clone.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -18,7 +18,7 @@ BEGIN {
     }
 }
 
-plan tests => 26;
+plan tests => 29;
 
 use Wine;
 use Recipe;
@@ -68,6 +68,10 @@ test_basic_cloning('clone_all');
     ok !defined $clone->id, 'Basic clone has no id';
 
     ok $clone->save, 'Basic clone could be saved';
+    is $clone->name, 'Cul de Veau à la Sauge';
+    is $clone->is_changed('name'), '', "This is documentation ;-)";
+    $clone->refresh;
+    is $clone->name, 'Cul de Veau à la Sauge';
     ok defined $clone->id, 'Basic clone has an id after saving';
     isnt $w->id, $clone->id, q(Basic clone's id differs from original's id);
 }
@@ -85,5 +89,5 @@ test_basic_cloning('clone_all');
     is $w->id, $clone->id, q(Full clone's id matches original's id);
 }
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }
 

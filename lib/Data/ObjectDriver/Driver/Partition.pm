@@ -1,8 +1,9 @@
-# $Id: Partition.pm 379 2007-06-20 23:57:08Z garth $
+# $Id: Partition.pm 552 2008-12-24 02:15:57Z ykerherve $
 
 package Data::ObjectDriver::Driver::Partition;
 use strict;
 use warnings;
+use Carp();
 
 use base qw( Data::ObjectDriver Class::Accessor::Fast );
 
@@ -13,18 +14,21 @@ sub init {
     $driver->SUPER::init(@_);
     my %param = @_;
     $driver->get_driver($param{get_driver});
+    $driver->{__working_drivers} = [];
     $driver;
 }
 
 sub lookup {
     my $driver = shift;
     my($class, $id) = @_;
+    return unless $id;
     $driver->get_driver->($id)->lookup($class, $id);
 }
 
 sub lookup_multi {
     my $driver = shift;
     my($class, $ids) = @_;
+    return [] unless @$ids;
     $driver->get_driver->($ids->[0])->lookup_multi($class, $ids);
 }
 
@@ -55,8 +59,55 @@ sub _exec_partitioned {
     } else {
         $d = $driver->get_driver->(@rest);
     }
+
+    if ( $driver->txn_active ) {
+        $driver->add_working_driver($d);
+    }
     $d->$meth($obj, @rest);
 }
+
+sub add_working_driver {
+    my $driver = shift;
+    my $part_driver = shift;
+    if (! $part_driver->txn_active) {
+        $part_driver->begin_work;
+        push @{$driver->{__working_drivers}}, $part_driver;
+    }
+}
+
+sub commit {
+    my $driver = shift;
+
+    ## if the driver has its own internal txn_active flag
+    ## off, we don't bother ending. Maybe we already did
+    return unless $driver->txn_active;
+
+    $driver->SUPER::commit(@_);
+    _end_txn($driver, 'commit', @_);
+}
+
+sub rollback {
+    my $driver = shift;
+
+    ## if the driver has its own internal txn_active flag
+    ## off, we don't bother ending. Maybe we already did
+    return unless $driver->txn_active;
+
+    $driver->SUPER::rollback(@_);
+    _end_txn($driver, 'rollback', @_);
+}
+
+sub _end_txn {
+    my ($driver, $method) = @_;
+
+    my $wd = $driver->{__working_drivers};
+    $driver->{__working_drivers} = [];
+
+    for my $part_driver (@{ $wd || [] }) {
+        $part_driver->$method;
+    }
+}
+
 
 1;
 

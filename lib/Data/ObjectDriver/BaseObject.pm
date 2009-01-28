@@ -1,11 +1,11 @@
-# $Id: BaseObject.pm 457 2008-02-24 22:09:29Z btrott $
+# $Id: BaseObject.pm 553 2009-01-07 22:20:44Z ykerherve $
 
 package Data::ObjectDriver::BaseObject;
 use strict;
 use warnings;
 
 our $HasWeaken;
-eval "use Scalar::Util qw(weaken)";
+eval q{ use Scalar::Util qw(weaken) }; ## no critic
 $HasWeaken = !$@;
 
 use Carp ();
@@ -15,6 +15,10 @@ use Class::Trigger qw( pre_save post_save post_load pre_search
                        pre_remove post_remove post_inflate );
 
 use Data::ObjectDriver::ResultSet;
+
+## Global Transaction variables
+our @WorkingDrivers;
+our $TransactionLevel = 0;
 
 sub install_properties {
     my $class = shift;
@@ -269,6 +273,27 @@ sub primary_key_to_terms {
     \%terms;
 }
 
+sub is_same {
+    my($obj, $other) = @_;
+
+    my @a;
+    for my $o ($obj, $other) {
+        push @a, [ map { $o->$_() } @{ $o->primary_key_tuple }];
+    }
+    return is_same_array( @a );
+}
+
+sub object_is_stored {
+    my $obj = shift;
+    return $obj->{__is_stored} ? 1 : 0;
+}
+sub pk_str {
+    my ($obj) = @_;
+    my $pk = $obj->primary_key;
+    return $pk unless ref ($pk) eq 'ARRAY';
+    return join (":", @$pk);
+}
+
 sub has_primary_key {
     my $obj = shift;
     return unless @{$obj->primary_key_tuple};
@@ -300,7 +325,7 @@ sub set_values {
     my $values = shift;
     for my $col (keys %$values) {
         unless ( $obj->has_column($col) ) {
-            Carp::croak("You tried to set inexistent column $col to value $values->{$col} on " . ref($obj));
+            Carp::croak("You tried to set non-existent column $col to value $values->{$col} on " . ref($obj));
         }
         $obj->$col($values->{$col});
     }
@@ -468,24 +493,43 @@ sub search {
     my $class = shift;
     my($terms, $args) = @_;
     my $driver = $class->driver;
-    my @objs = $driver->search($class, $terms, $args);
+    if (wantarray) {
+        my @objs = $driver->search($class, $terms, $args);
 
-    ## Don't attempt to cache objects where the caller specified fetchonly,
-    ## because they won't be complete.
-    ## Also skip this step if we don't get any objects back from the search
-    if (!$args->{fetchonly} || !@objs) {
-        for my $obj (@objs) {
-            $driver->cache_object($obj) if $obj;
+        ## Don't attempt to cache objects where the caller specified fetchonly,
+        ## because they won't be complete.
+        ## Also skip this step if we don't get any objects back from the search
+        if (!$args->{fetchonly} || !@objs) {
+            for my $obj (@objs) {
+                $driver->cache_object($obj) if $obj;
+            }
         }
+        return @objs;
+    } else {
+        my $iter = $driver->search($class, $terms, $args);
+        return $iter if $args->{fetchonly};
+
+        my $caching_iter = sub {
+            my $d = $driver;
+
+            my $o = $iter->();
+            unless ($o) {
+                $iter->end;
+                return;
+            }
+            $driver->cache_object($o);
+            return $o;
+        };
+        return Data::ObjectDriver::Iterator->new($caching_iter, sub { $iter->end });
     }
-    $driver->list_or_iterator(\@objs);
 }
 
-sub remove          { shift->_proxy('remove',       @_) }
-sub update          { shift->_proxy('update',       @_) }
-sub insert          { shift->_proxy('insert',       @_) }
-sub replace         { shift->_proxy('replace',      @_) }
-sub fetch_data      { shift->_proxy('fetch_data',   @_) }
+sub remove         { shift->_proxy( 'remove',         @_ ) }
+sub update         { shift->_proxy( 'update',         @_ ) }
+sub insert         { shift->_proxy( 'insert',         @_ ) }
+sub replace        { shift->_proxy( 'replace',        @_ ) }
+sub fetch_data     { shift->_proxy( 'fetch_data',     @_ ) }
+sub uncache_object { shift->_proxy( 'uncache_object', @_ ) }
 
 sub refresh {
     my $obj = shift;
@@ -496,10 +540,74 @@ sub refresh {
     return 1;
 }
 
+## NOTE: I wonder if it could be useful to BaseObject superclass
+## to override the global transaction flag. If so, I'd add methods
+## to manipulate this flag and the working drivers. -- Yann
 sub _proxy {
     my $obj = shift;
     my($meth, @args) = @_;
-    $obj->driver->$meth($obj, @args);
+    my $driver = $obj->driver;
+    ## faster than $obj->txn_active && ! $driver->txn_active but see note.
+    if ($TransactionLevel && ! $driver->txn_active) {
+        $driver->begin_work;
+        push @WorkingDrivers, $driver;
+    }
+    $driver->$meth($obj, @args);
+}
+
+sub txn_active { $TransactionLevel }
+
+sub begin_work {
+    my $class = shift;
+    if ( $TransactionLevel > 0 ) {
+        Carp::carp(
+            $TransactionLevel > 1
+            ? "$TransactionLevel transactions already active"
+            : "Transaction already active"
+        );
+    }
+    $TransactionLevel++;
+}
+
+sub commit {
+    my $class = shift;
+    $class->_end_txn('commit');
+}
+
+sub rollback {
+    my $class = shift;
+    $class->_end_txn('rollback');
+}
+
+sub _end_txn {
+    my $class = shift;
+    my $meth  =  shift;
+    
+    ## Ignore nested transactions
+    if ($TransactionLevel > 1) {
+        $TransactionLevel--;
+        return;
+    }
+    
+    if (! $TransactionLevel) {
+        Carp::carp("No active transaction to end; ignoring $meth");
+        return;
+    }
+    my @wd = @WorkingDrivers;
+    $TransactionLevel--;
+    @WorkingDrivers = ();
+    
+    for my $driver (@wd) {
+        $driver->$meth;
+    }
+}
+
+sub txn_debug {
+    my $class = shift;
+    return {
+        txn     => $TransactionLevel,
+        drivers => \@WorkingDrivers,
+    };
 }
 
 sub deflate { { columns => shift->column_values } }
@@ -656,7 +764,8 @@ Known C<column_defs> types are:
 =item * C<blob>
 
 A blob of binary data. C<Data::ObjectDriver::Driver::DBD::Pg> maps this to
-C<DBI::Pg::PG_BYTEA>, and C<DBD::SQLite> to C<DBI::SQL_BLOB>.
+C<DBI::Pg::PG_BYTEA>, C<DBD::SQLite> to C<DBI::SQL_BLOB> and C<DBD::Oracle>
+to C<ORA_BLOB>.
 
 =item * C<bin_char>
 
@@ -930,9 +1039,30 @@ Returns the I<values> of the primary key fields of C<$obj>.
 
 Returns the I<names> of the primary key fields of C<Class> objects.
 
+=head2 C<$obj-E<gt>is_same($other_obj)>
+
+Do a primary key check on C<$obj> and $<other_obj> and returns true only if they
+are identical.
+
+=head2 C<$obj-E<gt>object_is_stored()>
+
+Returns true if the object hasn't been stored in the database yet.
+This is particularily useful in triggers where you can then determine
+if the object is being INSERTED or just UPDATED.
+
+=head2 C<$obj-E<gt>pk_str()>
+
+returns the primay key has a printable string.
+
 =head2 C<$obj-E<gt>has_primary_key()>
 
 Returns whether the given object has values for all of its primary key fields.
+
+=head2 C<$obj-E<gt>uncache_object()>
+
+If you use a Cache driver, returned object will be automatically cached as a result
+of common retrieve operations. In some rare cases you may want the cache to be cleared
+explicitely, and this method provides you with a way to do it.
 
 =head2 C<$obj-E<gt>primary_key_to_terms([$id])>
 
@@ -1052,6 +1182,41 @@ want to store that in the cache, as well.
 Inflates the deflated representation of the object I<$deflated> into a proper
 object in the class I<Class>. That is, undoes the operation C<$deflated =
 $obj-E<gt>deflate()> by returning a new object equivalent to C<$obj>.
+
+=head1 TRANSACTION SUPPORT AND METHODS
+
+=head2 Introduction
+
+When dealing with the methods on this class, the transactions are global,
+i.e: applied to all drivers. You can still enable transactions per driver
+if you directly use the driver API.
+
+=head2 C<Class-E<gt>begin_work>
+
+This enable transactions globally for all drivers until the next L<rollback>
+or L<commit> call on the class.
+
+If begin_work is called while a transaction is still active (nested transaction)
+then the two transactions are merged. So inner transactions are ignored and
+a warning will be emitted.
+
+=head2 C<Class-E<gt>rollback>
+
+This rollbacks all the transactions since the last begin work, and exits
+from the active transaction state.
+
+=head2 C<Class-E<gt>commit>
+
+Commits the transactions, and exits from the active transaction state.
+
+=head2 C<Class-E<gt>txn_debug>
+
+Just return the value of the global flag and the current working drivers
+in a hashref.
+
+=head2 C<Class-E<gt>txn_active>
+
+Returns true if a transaction is already active.
 
 =head1 DIAGNOSTICS
 

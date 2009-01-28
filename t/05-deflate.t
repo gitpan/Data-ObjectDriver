@@ -1,4 +1,4 @@
-# $Id: 05-deflate.t 232 2006-08-05 23:27:32Z btrott $
+# $Id: 05-deflate.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -42,6 +42,7 @@ is $r2->title, $recipe->title;
 ## Install some deflate/inflate in the Cache driver.
 {
     no warnings 'once';
+    no warnings 'redefine';
     *Data::ObjectDriver::Driver::Cache::Cache::deflate = sub {
         $_[1]->deflate;
     };
@@ -91,4 +92,4 @@ ok $is->[0]->{__cached};
 is $is->[1]->name, 'Milk';
 ok $is->[1]->{__cached};
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }

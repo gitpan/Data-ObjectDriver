@@ -1,4 +1,4 @@
-# $Id: Ingredient2Recipe.pm 318 2007-01-20 03:31:06Z ykerherve $
+# $Id: Ingredient2Recipe.pm 497 2008-06-16 21:26:21Z ykerherve $
 
 package Ingredient2Recipe;
 use strict;
@@ -16,7 +16,7 @@ my $global2_driver = Data::ObjectDriver::Driver::DBI->new(
 );
 
 __PACKAGE__->install_properties({
-    columns     => [ 'recipe_id', 'ingredient_id' ],
+    columns     => [ 'recipe_id', 'ingredient_id', "value1" ],
     datasource  => 'ingredient2recipe',
     primary_key => 'recipe_id', ## should match lookup XXX could we auto generate it ? 
     driver      => Data::ObjectDriver::Driver::Multiplexer->new(

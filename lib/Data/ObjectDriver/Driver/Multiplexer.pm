@@ -1,4 +1,4 @@
-# $Id: Multiplexer.pm 396 2007-08-12 23:53:29Z ykerherve $
+# $Id: Multiplexer.pm 552 2008-12-24 02:15:57Z ykerherve $
 
 package Data::ObjectDriver::Driver::Multiplexer;
 use strict;
@@ -30,7 +30,7 @@ sub lookup {
     return $subdriver->lookup(@_);
 }
 
-sub fetch_data { 
+sub fetch_data {
     my $driver = shift;
     my $subdriver = $driver->on_lookup;
     croak "on_lookup is not defined in $driver"
@@ -93,9 +93,10 @@ sub _exec_multiplexed {
     my($meth, $obj, @args) = @_;
     my $orig_obj = Storable::dclone($obj);
     my $ret;
+
     ## We want to be sure to have the initial and final state of the object
     ## strictly identical as if we made only one call on $obj
-    ## (Perhaps it's a bit overkill ? playing with 'changed_cols' may suffice)
+    ## (Perhaps it's a bit overkill ? playing with 'changed_cols' may do the trick)
     for my $sub_driver (@{ $driver->drivers }) {
         $obj = Storable::dclone($orig_obj);
         $ret = $sub_driver->$meth($obj, @args);
@@ -103,13 +104,31 @@ sub _exec_multiplexed {
     return $ret;
 }
 
-## Nobody should ask a dbh for us directly, if someone does, this
-## is probably to change handler properties (transaction). So 
-## we assume that only the on_lookup is important (I said it was experimental..)
-sub get_dbh {
+sub begin_work {
     my $driver = shift;
-    my $subdriver = $driver->on_lookup;
-    return $subdriver->get_dbh(@_);
+    $driver->SUPER::begin_work(@_);
+    for my $sub_driver (@{ $driver->drivers }) {
+        $sub_driver->begin_work;
+    }
+}
+
+sub commit {
+    my $driver = shift;
+    $driver->SUPER::commit(@_);
+    $driver->_end_txn('commit', @_);
+}
+
+sub rollback {
+    my $driver = shift;
+    $driver->SUPER::rollback(@_);
+    $driver->_end_txn('rollback', @_);
+}
+
+sub _end_txn {
+    my ($driver, $method) = @_;
+    for my $sub_driver (@{ $driver->drivers }) {
+        $sub_driver->$method;
+    }
 }
 
 1;
@@ -161,7 +180,7 @@ Note that this driver has the following limitations currently:
 =item 3. IT'S VERY EXPERIMENTAL.
 
 =item 4. This documentation you're reading is incomplete. the api is likely
-to evolve  
+to evolve
 
 =back
 

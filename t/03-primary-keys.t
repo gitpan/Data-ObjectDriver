@@ -1,4 +1,4 @@
-# $Id: 03-primary-keys.t 243 2006-08-14 18:37:07Z plindner $
+# $Id: 03-primary-keys.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -106,5 +106,5 @@ setup_dbs({
     is $wine->name, "zero";
 }
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }
 

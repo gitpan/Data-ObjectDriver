@@ -1,4 +1,4 @@
-# $Id: mysql.pm 315 2007-01-13 00:12:21Z mpaschal $
+# $Id: mysql.pm 539 2008-11-21 21:23:12Z swistow $
 
 package Data::ObjectDriver::Driver::DBD::mysql;
 use strict;
@@ -33,6 +33,7 @@ sub is_case_insensitive { 1 };
 
 # yes, MySQL invented(?) REPLACE INTO extension
 sub can_replace { 1 }
+
 
 sub bulk_insert {
     my $dbd = shift;

@@ -1,4 +1,4 @@
-# $Id: 01-col-inheritance.t 83 2006-05-04 00:06:36Z sky $
+# $Id: 01-col-inheritance.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -36,4 +36,4 @@ ok($wine->save, 'Object saved successfully');
 ok ($wine->has_column("id")) ;
 ok ($wine->has_column("rating")) ;
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }

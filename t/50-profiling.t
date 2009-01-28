@@ -1,4 +1,4 @@
-# $Id: 50-profiling.t 343 2007-04-03 00:16:46Z ykerherve $
+# $Id: 50-profiling.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -93,4 +93,4 @@ SKIP: {
         like $profiler->report_queries_by_type, qr/SELECT/;
 };
 
-teardown_dbs(qw( global cluster1 cluster2 ));
+sub DESTROY { teardown_dbs(qw( global cluster1 cluster2 )); }

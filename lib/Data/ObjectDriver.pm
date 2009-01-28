@@ -1,4 +1,4 @@
-# $Id: ObjectDriver.pm 456 2008-02-24 22:06:01Z btrott $
+# $Id: ObjectDriver.pm 560 2009-01-28 18:37:28Z btrott $
 
 package Data::ObjectDriver;
 use strict;
@@ -8,9 +8,9 @@ use Class::Accessor::Fast;
 use base qw( Class::Accessor::Fast );
 use Data::ObjectDriver::Iterator;
 
-__PACKAGE__->mk_accessors(qw( pk_generator ));
+__PACKAGE__->mk_accessors(qw( pk_generator txn_active ));
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 our $DEBUG = $ENV{DOD_DEBUG} || 0;
 our $PROFILE = $ENV{DOD_PROFILE} || 0;
 our $PROFILER;
@@ -38,6 +38,7 @@ sub init {
     my $driver = shift;
     my %param = @_;
     $driver->pk_generator($param{pk_generator});
+    $driver->txn_active(0);
     $driver;
 }
 
@@ -55,6 +56,29 @@ sub start_query {
 }
 
 sub end_query { }
+
+sub begin_work {
+    my $driver = shift;
+    $driver->txn_active(1);
+    $driver->debug(sprintf("%14s", "BEGIN_WORK") . ": driver=$driver");
+}
+
+sub commit {
+    my $driver = shift;
+    _end_txn($driver, 'commit');
+}
+
+sub rollback {
+    my $driver = shift;
+    _end_txn($driver, 'rollback');
+}
+
+sub _end_txn {
+    my $driver = shift;
+    my $method = shift;
+    $driver->txn_active(0);
+    $driver->debug(sprintf("%14s", uc($method)) . ": driver=$driver");
+}
 
 sub debug {
     my $driver = shift;
@@ -106,6 +130,7 @@ sub list_or_iterator {
 }
 
 sub cache_object { }
+sub uncache_object { }
 
 1;
 __END__
@@ -396,6 +421,23 @@ Optional; the default is to fetch the values of all of the columns.
 If set to a true value, the I<SELECT> statement generated will include a
 I<FOR UPDATE> clause.
 
+=item * comment
+
+A sql comment to watermark the SQL query.
+
+=item * window_size
+
+Used when requesting an iterator for the search method and selecting
+a large result set or a result set of unknown size. In such a case,
+no LIMIT clause is assigned, which can load all available objects into
+memory. Specifying C<window_size> will load objects in manageable chunks.
+This will also cause any caching driver to be bypassed for issuing
+the search itself. Objects are still placed into the cache upon load.
+
+This attribute is ignored when the search method is invoked in an array
+context, or if a C<limit> attribute is also specified that is smaller than
+the C<window_size>.
+
 =back
 
 =head2 Class->search(\@terms [, \%options ])
@@ -571,6 +613,89 @@ I<Data::ObjectDriver::Profiler> instance:
 Then see the documentation for I<Data::ObjectDriver::Profiler> to see the
 methods on that class.
 
+
+=head1 TRANSACTIONS
+
+
+Transactions are supported by Data::ObjectDriver's default drivers. So each
+Driver is capable to deal with transactional state independently. Additionally
+<Data::ObjectDriver::BaseObject> class know how to turn transactions switch on
+for all objects.
+
+In the case of a global transaction all drivers used during this time are put
+in a transactional state until the end of the transaction.
+
+=head2 Example
+
+    ## start a transaction
+    Data::ObjectDriver::BaseObject->begin_work;
+
+    $recipe = Recipe->new;
+    $recipe->title('lasagnes');
+    $recipe->save;
+
+    my $ingredient = Ingredient->new;
+    $ingredient->recipe_id($recipe->recipe_id);
+    $ingredient->name("more layers");
+    $ingredient->insert;
+    $ingredient->remove;
+
+    if ($you_are_sure) {
+        Data::ObjectDriver::BaseObject->commit;
+    }
+    else {
+        ## erase all trace of the above
+        Data::ObjectDriver::BaseObject->rollback;
+    }
+
+=head2 Driver implementation
+
+Drivers have to implement the following methods:
+
+=over 4
+
+=item * begin_work to initialize a transaction
+
+=item * rollback
+
+=item * commmit
+
+=back
+
+=head2 Nested transactions
+
+Are not supported and will result in warnings and the inner transactions
+to be ignored. Be sure to B<end> each transaction and not to let et long
+running transaction open (i.e you should execute a rollback or commit for
+each open begin_work).
+
+=head2 Transactions and DBI
+
+In order to make transactions work properly you have to make sure that
+the C<$dbh> for each DBI drivers are shared among drivers using the same
+database (basically dsn).
+
+One way of doing that is to define a get_dbh() subref in each DBI driver
+to return the same dbh if the dsn and attributes of the connection are
+identical.
+
+The other way is to use the new configuration flag on the DBI driver that
+has been added specifically for this purpose: C<reuse_dbh>.
+
+    ## example coming from the test suite
+    __PACKAGE__->install_properties({
+        columns => [ 'recipe_id', 'partition_id', 'title' ],
+        datasource => 'recipes',
+        primary_key => 'recipe_id',
+        driver => Data::ObjectDriver::Driver::Cache::Cache->new(
+            cache => Cache::Memory->new,
+            fallback => Data::ObjectDriver::Driver::DBI->new(
+                dsn      => 'dbi:SQLite:dbname=global.db',
+                reuse_dbh => 1,  ## be sure that the corresponding dbh is shared
+            ),
+        ),
+    });
+
 =head1 EXAMPLES
 
 =head2 A Partitioned, Caching Driver
@@ -628,10 +753,37 @@ methods on that class.
 
     1;
 
+=head1 SUPPORTED DATABASES
+
+I<Data::ObjectDriver> is very modular and it's not very diffucult to add new drivers.
+
+=over 4
+
+=item * MySQL is well supported and has been heavily tested.
+
+=item * PostgreSQL has been been used in production and should just work, too.
+
+=item * SQLite is supported, but YMMV depending on the version. This is the
+backend used for the test suite.
+
+=item * Oracle support has been added in 0.06
+
+=back
+
 =head1 LICENSE
 
 I<Data::ObjectDriver> is free software; you may redistribute it and/or modify
 it under the same terms as Perl itself.
+
+=head1 MAILING LIST, CODE & MORE INFORMATION
+
+I<Data::ObjectDriver> developers can be reached via the following group:
+L<http://groups.google.com/group/data-objectdriver>
+
+Bugs should be reported using the CPAN RT system, patches are encouraged when
+reporting bugs.
+
+L<http://code.sixapart.com/>
 
 =head1 AUTHOR & COPYRIGHT
 

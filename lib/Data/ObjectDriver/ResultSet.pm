@@ -7,6 +7,7 @@ package Data::ObjectDriver::ResultSet;
 use strict;
 
 use base qw( Class::Accessor::Fast );
+use List::Util qw(min);
 
 ## Public/_Private Accessors
 
@@ -91,6 +92,7 @@ sub add_constraint {
         my $cur_terms    = $self->_terms || {};
         my $filter_terms = $self->_filter_terms || {};
         foreach my $k (keys %$terms) {
+            $self->_results_loaded(0) unless $cur_terms->{$k};
             $cur_terms->{$k} = $terms->{$k};
             $filter_terms->{$k} = 1 if $self->_results_loaded;
         }
@@ -107,10 +109,12 @@ sub add_constraint {
         foreach my $k (keys %$args) {
             my $val = $args->{$k};
 
-            # If we get a limit arg that is bigger than our existing limit, then
+            # If we get a limit arg that is bigger than our existing limit (and
+            # we *have* an existing limit), then
             # make sure we force a requery.  Same for any filter arguments.
             # Same for offset arg that is  smaller than existing one.
-            if ((($k eq 'limit')  and (($cur_args->{'limit'}||0)  < $val)) or
+            if ((($k eq 'limit')  and
+            ( exists $cur_args->{'limit'} && defined $cur_args->{'limit'} && ($cur_args->{'limit'}||0)  < $val)) or
                 (($k eq 'offset') and (($cur_args->{'offset'}||0) > $val)) or
                 ($k eq 'filters')) {
                 $self->_results_loaded(0);
@@ -136,7 +140,9 @@ sub clear_constraint {
           if ref $term_names ne 'ARRAY';
 
         foreach my $n (@$term_names) {
-            delete $terms->{$n};
+            if (delete $terms->{$n}) {
+                $self->_results_loaded(0);
+            }
         }
     }
 
@@ -211,6 +217,23 @@ sub next {
     }
 }
 
+# look at next() without incrementing the cursor
+# like if you just want to see what's coming down the road at you
+sub peek_next {
+    my $self = shift;
+
+    return if $self->is_finished;
+
+    # Load the results and return an object
+    my $results = $self->_load_results;
+
+    my $obj = $results->[$self->_cursor + 1];
+
+    return $obj;
+}
+
+
+
 sub prev {
     my $self = shift;
 
@@ -239,12 +262,13 @@ sub curr {
 sub slice {
     my $self = shift;
     my ($start, $end) = @_;
-    my $limit = $end - $start;
 
     # Do we already have results?
     if ($self->_results) {
-        return @{ $self->_results }[$start, $end];
+        return [ @{ $self->_results }[$start..min($self->count-1, $end)] ];
     }
+
+    my $limit = $end - $start + 1;
 
     $self->add_offset($start);
     $self->add_limit($limit);
@@ -254,10 +278,25 @@ sub slice {
     return $r;
 }
 
+sub all {
+    my $self = shift;
+
+    return unless $self->count;
+
+    my @obj;
+    push @obj, $self->first;
+    while (my $obj = $self->next) {
+        push @obj, $obj;
+    }
+
+    $self->rewind;
+    return @obj;
+}
+
 sub count {
     my $self = shift;
 
-    # Get/load the results if we already have them or if we have a limit term
+    # Get/load the results if we already have them
     if ($self->_results_loaded or $self->get_limit) {
         my $results = $self->_load_results;
         return scalar @$results;
@@ -415,6 +454,12 @@ sub _load_results {
     return \@r;
 }
 
+sub rewind {
+    my $self = shift;
+    $self->is_finished(0);
+    $self->_cursor(-1);
+    return $self;
+}
 1;
 
 __END__
@@ -739,6 +784,39 @@ Arguments:
 
   $obj = $res->next;
 
+=head2 peek_next
+
+Retrieve the next item in the resultset WITHOUT advancing the cursor.
+
+Arguments:
+
+=over 4
+
+=item I<none>
+
+=back
+
+; Return value
+: The next object or undef if past the end of the result set
+
+; Notes
+: Calling this method will force a DB query.  All subsequent calls to I<curr> will return this object
+
+; Example
+
+  while ($bottle = $res->next){
+
+      if ($bottle->type eq 'Bud Light'
+          && $res->peek_next->type eq 'Chimay'){
+
+          $bottle->pass; #don't spoil my palate
+
+      }else{
+          $bottle->drink;
+      }
+  }
+
+
 =head2 prev
 
 Retrieve the previous item in the result set
@@ -856,8 +934,12 @@ Arguments:
 
 =head2 dod_debug
 
-Set this and you'll see $Data::ObjectDriver::DEBUG output when 
+Set this and you'll see $Data::ObjectDriver::DEBUG output when
 I go to get the results.
+
+=head2 rewind
+
+Move back to the start of the iterator for this instance of results of a query.
 
 =head2 first
 

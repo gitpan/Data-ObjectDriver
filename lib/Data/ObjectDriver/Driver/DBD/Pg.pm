@@ -1,4 +1,4 @@
-# $Id: Pg.pm 300 2006-11-22 02:02:52Z ykerherve $
+# $Id: Pg.pm 550 2008-12-22 22:26:14Z ykerherve $
 
 package Data::ObjectDriver::Driver::DBD::Pg;
 use strict;
@@ -7,7 +7,8 @@ use warnings;
 use base qw( Data::ObjectDriver::Driver::DBD );
 
 # No postgresql doesn't allow MySQL's REPLACE INTO syntax 
-sub can_replace { 1 }
+sub can_replace { 0 }
+
 
 sub init_dbh {
     my $dbd = shift;
@@ -26,17 +27,21 @@ sub bind_param_attributes {
 
 sub sequence_name {
     my $dbd = shift;
-    my($class) = @_;
-    join '_', $class->datasource,
+    my($class, $driver) = @_;
+
+    my $datasource = $class ->datasource;
+    my $prefix     = $driver->prefix;
+    $datasource    = join('', $prefix, $datasource) if $prefix;
+    join '_', $datasource,
         $dbd->db_column_name($class->datasource, $class->properties->{primary_key}),
         'seq';
 }
 
 sub fetch_id {
     my $dbd = shift;
-    my($class, $dbh, $sth) = @_;
+    my($class, $dbh, $sth, $driver) = @_;
     $dbh->last_insert_id(undef, undef, undef, undef,
-        { sequence => $dbd->sequence_name($class) });
+        { sequence => $dbd->sequence_name($class, $driver) });
 }
 
 sub bulk_insert {

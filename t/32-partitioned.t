@@ -1,4 +1,4 @@
-# $Id: 32-partitioned.t 313 2007-01-10 23:44:09Z ykerherve $
+# $Id: 32-partitioned.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -10,7 +10,7 @@ use Test::More;
 unless (eval { require DBD::SQLite }) {
     plan skip_all => 'Tests require DBD::SQLite';
 }
-plan tests => 52;
+plan tests => 92;
 
 setup_dbs({
     global   => [ qw( recipes ) ],
@@ -48,6 +48,7 @@ $tmp = $iter->();
 ok(!$iter->(), 'Iterator gave us only one recipe');
 is(ref $tmp, 'Recipe', 'Iterator gave us a recipe');
 is($tmp->title, 'My Banana Milkshake', 'Title is My Banana Milkshake');
+$iter->end();
 
 my $ingredient = Ingredient->new;
 $ingredient->recipe_id($recipe->recipe_id);
@@ -72,6 +73,7 @@ $tmp = $iter->();
 ok(!$iter->(), 'Iterator gave us only one ingredient');
 is(ref $tmp, 'Ingredient', 'Iterator gave us an ingredient');
 is($tmp->name, 'Vanilla Ice Cream', 'Name is Vanilla Ice Cream');
+$iter->end();
 
 my $ingredient2 = Ingredient->new;
 $ingredient2->recipe_id($recipe->recipe_id);
@@ -121,4 +123,6 @@ is $ingredient3->remove, 1, 'Ingredient removed successfully';
 is $recipe->remove, 1, 'Recipe removed successfully';
 is $recipe2->remove, 1, 'Recipe removed successfully';
 
-teardown_dbs(qw( global cluster1 cluster2 ));
+require 't/txn-common.pl';
+
+sub DESTROY { teardown_dbs(qw( global cluster1 cluster2 )); }

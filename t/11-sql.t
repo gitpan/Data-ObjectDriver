@@ -1,9 +1,9 @@
-# $Id: 11-sql.t 319 2007-01-22 21:06:50Z btrott $
+# $Id: 11-sql.t 518 2008-08-27 05:41:23Z miyagawa $
 
 use strict;
 
 use Data::ObjectDriver::SQL;
-use Test::More tests => 58;
+use Test::More tests => 67;
 
 my $stmt = ns();
 ok($stmt, 'Created SQL object');
@@ -211,5 +211,49 @@ HAVING (COUNT(*) = ?)
 ORDER BY foo DESC
 LIMIT 2
 SQL
+
+# DISTINCT
+$stmt = ns();
+$stmt->add_select(foo => 'foo');
+$stmt->from([ qw(baz) ]);
+is($stmt->as_sql, "SELECT foo\nFROM baz\n", "DISTINCT is absent by default");
+$stmt->distinct(1);
+is($stmt->as_sql, "SELECT DISTINCT foo\nFROM baz\n", "we can turn on DISTINCT");
+
+# index hint
+$stmt = ns();
+$stmt->add_select(foo => 'foo');
+$stmt->from([ qw(baz) ]);
+is($stmt->as_sql, "SELECT foo\nFROM baz\n", "index hint is absent by default");
+$stmt->add_index_hint('baz' => { type => 'USE', list => ['index_hint']});
+is($stmt->as_sql, "SELECT foo\nFROM baz USE INDEX (index_hint)\n", "we can turn on USE INDEX");
+
+# index hint with joins
+$stmt->joins([]);
+$stmt->from([]);
+$stmt->add_join(baz => { type => 'inner', table => 'baz',
+                         condition => 'baz.baz_id = foo.baz_id' });
+is($stmt->as_sql, "SELECT foo\nFROM baz USE INDEX (index_hint) INNER JOIN baz ON baz.baz_id = foo.baz_id\n", 'USE INDEX with JOIN');
+$stmt->from([]);
+$stmt->joins([]);
+$stmt->add_join(baz => [
+        { type => 'inner', table => 'baz b1',
+          condition => 'baz.baz_id = b1.baz_id AND b1.quux_id = 1' },
+        { type => 'left', table => 'baz b2',
+          condition => 'baz.baz_id = b2.baz_id AND b2.quux_id = 2' },
+    ]);
+is($stmt->as_sql, "SELECT foo\nFROM baz USE INDEX (index_hint) INNER JOIN baz b1 ON baz.baz_id = b1.baz_id AND b1.quux_id = 1 LEFT JOIN baz b2 ON baz.baz_id = b2.baz_id AND b2.quux_id = 2\n", 'USE INDEX with JOINs');
+
+$stmt = ns();
+$stmt->add_select(foo => 'foo');
+$stmt->from([ qw(baz) ]);
+$stmt->comment("mycomment");
+is($stmt->as_sql, "SELECT foo\nFROM baz\n-- mycomment");
+
+$stmt->comment("\nbad\n\nmycomment");
+is($stmt->as_sql, "SELECT foo\nFROM baz\n-- bad", "correctly untainted");
+
+$stmt->comment("G\\G");
+is($stmt->as_sql, "SELECT foo\nFROM baz\n-- G", "correctly untainted");
 
 sub ns { Data::ObjectDriver::SQL->new }

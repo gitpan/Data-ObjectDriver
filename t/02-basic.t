@@ -19,7 +19,7 @@ BEGIN {
     }
 }
 
-plan tests => 58;
+plan tests => 67;
 
 use Wine;
 use Recipe;
@@ -196,6 +196,7 @@ setup_dbs({
     
     # emulate a driver which doesn't support REPLACE INTO
     { 
+        no warnings 'redefine';
         local *Data::ObjectDriver::Driver::DBD::SQLite::can_replace = sub { 0 };
         $r->title('replaced');
         $r->recipe_id("lamer");
@@ -244,5 +245,35 @@ setup_dbs({
     is (Wine->remove({}, { nofetch => 1 }), '0E0', 'removing all bad wine');
 }
 
-#teardown_dbs(qw( global ));
+# different utilities
+{
+    my $w1 = Wine->new;
+    $w1->name("Chateau la pompe");
+    $w1->insert;
+
+    my $w3 = Wine->new;
+    $w3->name("different");
+    $w3->insert;
+    
+    my $w2 = Wine->lookup($w1->id);
+    ok  $w1->is_same($w1);
+    ok  $w2->is_same($w1);
+    ok  $w1->is_same($w2);
+    ok !$w1->is_same($w3);
+    ok !$w3->is_same($w2);
+
+    like $w1->pk_str, qr/\d+/;
+}
+
+# Test the new flag for persistent store insertion
+{
+    my $w = Wine->new(name => 'flag test', rating=> 4);
+    ok !$w->object_is_stored, "this object needs to be saved!";
+    $w->save;
+    ok $w->object_is_stored, "this object is no saved";
+    my $w2 = Wine->lookup( $w->id );
+    ok $w2->object_is_stored, "an object fetched from the database is by definition NOT ephemeral";
+}
+
+sub DESTROY { teardown_dbs(qw( global )); }
 

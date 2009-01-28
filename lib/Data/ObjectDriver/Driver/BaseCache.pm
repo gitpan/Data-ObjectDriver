@@ -1,4 +1,4 @@
-# $Id: BaseCache.pm 404 2007-08-30 20:21:58Z ykerherve $
+# $Id: BaseCache.pm 552 2008-12-24 02:15:57Z ykerherve $
 
 package Data::ObjectDriver::Driver::BaseCache;
 use strict;
@@ -9,7 +9,7 @@ use base qw( Data::ObjectDriver Class::Accessor::Fast
 
 use Carp ();
 
-__PACKAGE__->mk_accessors(qw( cache fallback ));
+__PACKAGE__->mk_accessors(qw( cache fallback txn_buffer));
 __PACKAGE__->mk_classdata(qw( Disabled ));
 
 sub deflate { $_[1] }
@@ -29,7 +29,43 @@ sub init {
         or Carp::croak("cache is required");
     $driver->fallback($param{fallback})
         or Carp::croak("fallback is required");
+    $driver->txn_buffer([]);
     $driver;
+}
+
+sub begin_work {
+    my $driver = shift;
+    my $rv = $driver->fallback->begin_work(@_);
+    $driver->SUPER::begin_work(@_);
+    return $rv;
+}
+
+sub commit {
+    my $driver = shift;
+    return unless $driver->txn_active;
+
+    my $rv = $driver->fallback->commit(@_);
+
+    $driver->debug(sprintf("%14s", "COMMIT(" . scalar(@{$driver->txn_buffer}) . ")") . ": driver=$driver");
+    while (my $cb = shift @{$driver->txn_buffer}) {
+        $cb->();
+    }
+    $driver->SUPER::commit(@_);
+
+    return $rv;
+}
+
+sub rollback {
+    my $driver = shift;
+    return unless $driver->txn_active;
+    my $rv = $driver->fallback->rollback(@_);
+
+    $driver->debug(sprintf("%14s", "ROLLBACK(" . scalar(@{$driver->txn_buffer}) . ")") . ": driver=$driver");
+    $driver->txn_buffer([]);
+
+    $driver->SUPER::rollback(@_);
+
+    return $rv;
 }
 
 sub cache_object {
@@ -40,10 +76,12 @@ sub cache_object {
     ## If it's already cached in this layer, assume it's already cached in
     ## all layers below this, as well.
     unless (exists $obj->{__cached} && $obj->{__cached}{ref $driver}) {
-        $driver->add_to_cache(
+        $driver->modify_cache(sub {
+            $driver->add_to_cache(
                 $driver->cache_key(ref($obj), $obj->primary_key),
                 $driver->deflate($obj)
             );
+        });
         $driver->fallback->cache_object($obj);
     }
 }
@@ -53,7 +91,7 @@ sub lookup {
     my($class, $id) = @_;
     return unless defined $id;
     return $driver->fallback->lookup($class, $id)
-        if $driver->Disabled;
+        if $driver->Disabled or $driver->txn_active;
     my $key = $driver->cache_key($class, $id);
     my $obj = $driver->get_from_cache($key);
     if ($obj) {
@@ -83,7 +121,7 @@ sub lookup_multi {
     my $driver = shift;
     my($class, $ids) = @_;
     return $driver->fallback->lookup_multi($class, $ids)
-        if $driver->Disabled;
+        if $driver->Disabled or $driver->txn_active;
 
     my %id2key = map { $_ => $driver->cache_key($class, $_) } grep { defined } @$ids;
     my $got = $driver->get_multi_from_cache(values %id2key);
@@ -149,14 +187,35 @@ sub search {
     local $args->{fetchonly} = $class->primary_key_tuple;
     ## Disable triggers for this load. We don't want the post_load trigger
     ## being called twice.
-    $args->{no_triggers} = 1;
+    local $args->{no_triggers} = 1;
     my @objs = $driver->fallback->search($class, $terms, $args);
 
-    ## Load all of the objects using a lookup_multi, which is fast from
-    ## cache.
-    my $objs = $driver->lookup_multi($class, [ map { $_->primary_key } @objs ]);
+    my $windowed = (!wantarray) && $args->{window_size};
 
-    $driver->list_or_iterator($objs);
+    if ( $windowed ) {
+        my @window;
+        my $window_size = $args->{window_size};
+        my $iter = sub {
+            my $d = $driver;
+            while ( (!@window) && @objs ) {
+                my $objs = $driver->lookup_multi(
+                    $class,
+                    [ map { $_->primary_key }
+                          splice( @objs, 0, $window_size ) ]
+                );
+                # A small possibility exists that we may fetch
+                # some IDs here that no longer exist; grep these out
+                @window = grep { defined $_ } @$objs if $objs;
+            }
+            return @window ? shift @window : undef;
+        };
+        return Data::ObjectDriver::Iterator->new($iter, sub { @objs = (); @window = () });
+    } else {
+        ## Load all of the objects using a lookup_multi, which is fast from
+        ## cache.
+        my $objs = $driver->lookup_multi($class, [ map { $_->primary_key } @objs ]);
+        return $driver->list_or_iterator($objs);
+    }
 }
 
 sub update {
@@ -166,7 +225,9 @@ sub update {
         if $driver->Disabled;
     my $ret = $driver->fallback->update($obj);
     my $key = $driver->cache_key(ref($obj), $obj->primary_key);
-    $driver->update_cache($key, $driver->deflate($obj));
+    $driver->modify_cache(sub {
+        $driver->update_cache($key, $driver->deflate($obj));
+    });
     return $ret;
 }
 
@@ -181,8 +242,10 @@ sub replace {
     my $ret = $driver->fallback->replace($obj);
     if ($has_pk) {
         my $key = $driver->cache_key(ref($obj), $obj->primary_key);
-        $driver->update_cache($key, $driver->deflate($obj));
-    } 
+        $driver->modify_cache(sub {
+            $driver->update_cache($key, $driver->deflate($obj));
+        });
+    }
     return $ret;
 }
 
@@ -199,9 +262,20 @@ sub remove {
         Carp::croak("nofetch option isn't compatible with a cache driver");
     }
     if (ref $obj) {
-        $driver->remove_from_cache($driver->cache_key(ref($obj), $obj->primary_key));
+        $driver->uncache_object($obj);
     }
     $driver->fallback->remove(@_);
+}
+
+sub uncache_object {
+    my $driver = shift;
+    my($obj) = @_;
+    my $key = $driver->cache_key(ref($obj), $obj->primary_key);
+    return $driver->modify_cache(sub {
+        delete $obj->{__cached};
+        $driver->remove_from_cache($key);
+        $driver->fallback->uncache_object($obj);
+    });
 }
 
 sub cache_key {
@@ -215,6 +289,18 @@ sub cache_key {
         $key .= ':' . $v->();
     }
     return $key;
+}
+
+# if we're operating within a transaction then we need to buffer CRUD
+# and only commit to the cache upon commit
+sub modify_cache {
+    my ($driver, $cb) = @_;
+
+    unless ($driver->txn_active) {
+        return $cb->();
+    }
+    $driver->debug(sprintf("%14s", "BUFFER(1)") . ": driver=$driver");
+    push @{$driver->txn_buffer} => $cb;
 }
 
 sub DESTROY { }
@@ -286,7 +372,7 @@ Returns the cache key for an object of the given class with the given primary
 key. The cache key is used with the external cache to identify an object.
 
 In BaseCache's implementation, the key is the class name and all the column
-names of the primary key concatenated, separated by single colons. 
+names of the primary key concatenated, separated by single colons.
 
 =head2 C<$driver-E<gt>get_multi_from_cache(@cache_keys)>
 

@@ -1,4 +1,4 @@
-# $Id: 06-errors.t 210 2006-05-23 18:58:57Z btrott $
+# $Id: 06-errors.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -31,4 +31,4 @@ dies_ok { $t->insert } 'Second insert fails';
 
 is(ErrorTest->driver->last_error, Data::ObjectDriver::Errors->UNIQUE_CONSTRAINT, 'Failed because of a unique constraint');
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }

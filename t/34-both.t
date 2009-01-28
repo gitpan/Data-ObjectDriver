@@ -1,4 +1,4 @@
-# $Id: 34-both.t 300 2006-11-22 02:02:52Z ykerherve $
+# $Id: 34-both.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -18,7 +18,7 @@ BEGIN {
     }
 }
 
-plan tests => 46;
+plan tests => 90;
 
 use Recipe;
 use Ingredient;
@@ -32,6 +32,7 @@ setup_dbs({
 ## Install some deflate/inflate in the Cache driver.
 {
     no warnings 'once';
+    no warnings 'redefine';
     *Data::ObjectDriver::Driver::Cache::Cache::deflate = sub {
         $_[1]->deflate;
     };
@@ -114,13 +115,22 @@ my $i4 = Ingredient->lookup([ $recipe->recipe_id, $i3->id ]);
 ok !$i4->{__cached};
 is $i4->name, 'Flour';
 
+## verify it's in the cache
+my $key = $i4->driver->cache_key(ref($i4), $i4->primary_key);
+my $data = $i4->driver->get_from_cache($key);
+ok $data;
+is $data->{columns}{id}, $i3->id, "it's in the cache";
 ## Delete it from the cache, so that the next test is actually accurate.
-my $driver = Ingredient->driver;
-$driver->remove_from_cache($driver->cache_key('Ingredient', $i4->primary_key));
+$i4->uncache_object;
+ok ! $i4->driver->get_from_cache($key), "It's been purged from the cache";
 
 ## Now look up the ingredients again. Milk and Eggs should already be cached,
 ## and doing the search should now cache Flour.
 @is = Ingredient->search({ recipe_id => $recipe->recipe_id });
+is scalar(@is), 3;
+
+## this is still working if we add a comment 
+@is = Ingredient->search({ recipe_id => $recipe->recipe_id }, { comment => "mytest" });
 is scalar(@is), 3;
 
 ## Flour should now be cached.
@@ -176,4 +186,6 @@ $replaced = Recipe->lookup($rid);
 ok $replaced->{__cached};
 is $replaced->title, 'Cup Cake';
 
-teardown_dbs(qw( global cluster1 cluster2 ));
+require 't/txn-common.pl';
+
+sub DESTROY { teardown_dbs(qw( global cluster1 cluster2 )); }

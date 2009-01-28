@@ -1,4 +1,4 @@
-$Id: README 95 2006-05-04 00:07:42Z sky $
+$Id: README 485 2008-06-02 20:06:31Z gblankenbaker $
 
 This is Data::ObjectDriver, providing a simple and generic abstraction
 to databases (DBI and otherwise), along with support for partitioning and

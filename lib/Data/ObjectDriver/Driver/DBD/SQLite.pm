@@ -7,14 +7,17 @@ use base qw( Data::ObjectDriver::Driver::DBD );
 
 use Data::ObjectDriver::Errors;
 
-# yes according to http://www.sqlite.org/lang_replace.html 
+# yes according to http://www.sqlite.org/lang_replace.html
 sub can_replace { 1 }
+
+# SQLite has problems with prepare_cached
+sub can_prepare_cached_statements { 0 }
 
 sub fetch_id { $_[2]->func('last_insert_rowid') }
 
 sub bind_param_attributes {
     my ($dbd, $data_type) = @_;
-    if ($data_type) { 
+    if ($data_type) {
         if ($data_type eq 'blob') {
             return DBI::SQL_BLOB;
         } elsif ($data_type eq 'binchar') {
@@ -56,7 +59,6 @@ sub bulk_insert {
     return 1;
 }
 
-
 1;
 
 =pod
@@ -77,6 +79,6 @@ This is experimental.
 With the 1.11 version of L<DBD::SQLite> Blobs are handled transparently,
 so C<bind_param_attributes> is optionnal.
 With previous version of L<DBD::SQLite> users have experimented issues
-with binary data in CHAR (partially solved by the DBI::SQL_BINARY binding). 
+with binary data in CHAR (partially solved by the DBI::SQL_BINARY binding).
 
 =cut

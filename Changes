@@ -2,6 +2,49 @@
 
 Revision history for Data::ObjectDriver
 
+0.06
+    - Added peek_next() method to ResultSet, q.v.
+    - Localized creation of D::OD::Iterator object. Thanks to Hirotaka Ogawa
+      for the patch.
+    - Fixed compilation error with Perl 5.10. Thanks to smpeters for the patch.
+    - Added a new $object->uncache_object as a mirror of cache_object(), which
+      purge one object from the cache layer, for the cases where you want a
+      manual control over it.
+    - Added a "distinct" method to D::OD::SQL that forces the DISTINCT keyword
+      in the generated SQL statement. Thanks to John Berthels for the patch.
+    - Added a "window_size" argument for the search() method of the caching
+      layer to constrain the number of objects loaded from the database for
+      large or unbounded searches. 
+    - Added a "comment" argument to search parameter allowing the SQL
+      queries to be watermarked with SQL comments.
+    - Added a "object_is_stored" method on DOD objects, which returns true until
+      the object has been saved in the persistent store.
+    - Added a "pk_str" method on base objects has a nice shortcut for printing
+      the primary key of an object. 
+    - Added a "reuse_dbh" option to D::OD::D::DBI, if enabled it caches and reuses
+      $dbh using the dsn as the key.
+    - Exposed the transaction mechanism built in the drivers at the object levels:
+      D::OD::BO->begin_work now starts a global transaction across all drivers
+      ending with a rollback or a commit on the same class.
+    - Fix problem with prepare_cache in DBD::SQLite
+    - Fix PerlCritic tests
+      http://rt.cpan.org/Ticket/Display.html?id=37197
+    - Fix problems under 5.10
+      http://rt.cpan.org/Ticket/Display.html?id=30941
+    - Fix test failures under Win32
+      http://rt.cpan.org/Ticket/Display.html?id=24480
+    - Pg *can't* handle REPLACE
+      https://rt.cpan.org/Ticket/Display.html?id=38840
+    - Fixed an issue where Pg would look into the wrong sequence if DBI has a
+      'prefix' configured (used in a undocumented TheSchwartz feature)
+      https://rt.cpan.org/Ticket/Display.html?id=41880
+    - Added Oracle support, courtesy of Xiaoou Wu (Oracle)
+      https://rt.cpan.org/Ticket/Display.html?id=41929
+    - Added an "add_index_hint" method to D::OD::SQL to allow specifying
+      a "USE INDEX" hint.
+    - Added an experimental GearmanDBI driver that provides query coalescing
+      using Gearman workers (to sit in front of a direct DBI driver).
+
 0.05  2008.02.24
     - Added a new Data::ObjectDriver::ResultSet abstraction for building
       result sets with lazy-loading of the actual results. This allows for

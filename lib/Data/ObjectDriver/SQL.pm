@@ -1,4 +1,4 @@
-# $Id: SQL.pm 420 2007-11-30 00:56:58Z bchoate $
+# $Id: SQL.pm 552 2008-12-24 02:15:57Z ykerherve $
 
 package Data::ObjectDriver::SQL;
 use strict;
@@ -6,12 +6,18 @@ use warnings;
 
 use base qw( Class::Accessor::Fast );
 
-__PACKAGE__->mk_accessors(qw( select select_map select_map_reverse from joins where bind limit offset group order having where_values column_mutator ));
+__PACKAGE__->mk_accessors(qw(
+    select distinct select_map select_map_reverse
+    from joins where bind limit offset group order
+    having where_values column_mutator index_hint
+    comment
+));
 
 sub new {
     my $class = shift;
     my $stmt = $class->SUPER::new(@_);
     $stmt->select([]);
+    $stmt->distinct(0);
     $stmt->select_map({});
     $stmt->select_map_reverse({});
     $stmt->bind([]);
@@ -20,6 +26,7 @@ sub new {
     $stmt->where_values({});
     $stmt->having([]);
     $stmt->joins([]);
+    $stmt->index_hint({});
     $stmt;
 }
 
@@ -41,22 +48,34 @@ sub add_join {
     };
 }
 
+sub add_index_hint {
+    my $stmt = shift;
+    my($table, $hint) = @_;
+    $stmt->index_hint->{$table} = {
+        type => $hint->{type} || 'USE',
+        list => ref($hint->{list}) eq 'ARRAY' ? $hint->{list} : [ $hint->{list} ],
+    };
+}
+
 sub as_sql {
     my $stmt = shift;
     my $sql = '';
     if (@{ $stmt->select }) {
         $sql .= 'SELECT ';
+        $sql .= 'DISTINCT ' if $stmt->distinct;
         $sql .= join(', ',  map {
             my $alias = $stmt->select_map->{$_};
             $alias && /(?:^|\.)\Q$alias\E$/ ? $_ : "$_ $alias";
         } @{ $stmt->select }) . "\n";
     }
     $sql .= 'FROM ';
+
     ## Add any explicit JOIN statements before the non-joined tables.
     if ($stmt->joins && @{ $stmt->joins }) {
         my $initial_table_written = 0;
         for my $j (@{ $stmt->joins }) {
             my($table, $joins) = map { $j->{$_} } qw( table joins );
+            $table = $stmt->_add_index_hint($table); ## index hint handling
             $sql .= $table unless $initial_table_written++;
             for my $join (@{ $j->{joins} }) {
                 $sql .= ' ' .
@@ -66,7 +85,12 @@ sub as_sql {
         }
         $sql .= ', ' if @{ $stmt->from };
     }
-    $sql .= join(', ', @{ $stmt->from }) . "\n";
+
+    if ($stmt->from && @{ $stmt->from }) {
+        $sql .= join ', ', map { $stmt->_add_index_hint($_) } @{ $stmt->from };
+    }
+
+    $sql .= "\n";
     $sql .= $stmt->as_sql_where;
 
     $sql .= $stmt->as_aggregate('group');
@@ -74,7 +98,11 @@ sub as_sql {
     $sql .= $stmt->as_aggregate('order');
 
     $sql .= $stmt->as_limit;
-    $sql;
+    my $comment = $stmt->comment;
+    if ($comment && $comment =~ /([ 0-9a-zA-Z.:;()_#&,]+)/) {
+        $sql .= "-- $1" if $1;
+    }
+    return $sql;
 }
 
 sub as_limit {
@@ -233,6 +261,19 @@ sub _mk_term {
     ($term, \@bind, $col);
 }
 
+sub _add_index_hint {
+    my $stmt = shift;
+    my ($tbl_name) = @_;
+    my $hint = $stmt->index_hint->{$tbl_name};
+    return $tbl_name unless $hint && ref($hint) eq 'HASH';
+    if ($hint->{list} && @{ $hint->{list} }) {
+        return $tbl_name . ' ' . uc($hint->{type} || 'USE') . ' INDEX (' .
+                join (',', @{ $hint->{list} }) .
+                ')';
+    }
+    return $tbl_name;
+}
+
 1;
 
 __END__
@@ -254,7 +295,7 @@ Data::ObjectDriver::SQL - an SQL statement
     my $sth = $dbh->prepare($sql->as_sql);
     $sth->execute(@{ $sql->{bind} });
     my @values = $sth->selectrow_array();
-    
+
     my $obj = SomeObject->new();
     $obj->set_columns(...);
 
@@ -275,6 +316,10 @@ modification (for example, C<add_where()> for the C<where> attribute).
 =head2 C<select> (arrayref)
 
 The database columns to select in a C<SELECT> query.
+
+=head2 C<distinct> (boolean)
+
+Whether the C<SELECT> query should return DISTINCT rows only.
 
 =head2 C<select_map> (hashref)
 
@@ -401,6 +446,10 @@ specify a descending order. This member is optional.
 Note you can set a single ordering field, or use an arrayref containing
 multiple ordering fields.
 
+=head2 C<$sql-E<gt>comment([ $comment ])>
+
+Returns or sets a simple comment to the SQL statement
+
 =head1 USAGE
 
 =head2 C<Data::ObjectDriver::SQL-E<gt>new()>
@@ -420,6 +469,10 @@ C<$term> is optional, and defaults to the same value as C<$column>.
 Adds the join statement indicated by C<$table> and C<\@joins> to the list of
 C<JOIN> table references for the statement. The structure for the set of joins
 are as described for the C<joins> attribute member above.
+
+=head2 C<$sql-E<gt>add_index_hint($table, $index)>
+
+Specifies a particular index to use for a particular table.
 
 =head2 C<$sql-E<gt>add_where($column, $value)>
 
@@ -517,6 +570,23 @@ The C<$value> argument is currently ignored.
 Adds an expression to the C<HAVING> portion of the statement's C<GROUP ...
 HAVING> clause. The expression compares C<$column> using C<$value>, which can
 be any of the structures described above for the C<add_where()> method.
+
+=head2 C<$sql-E<gt>add_index_hint($table, \@hints)>
+
+Addes the index hint into a C<SELECT> query. The structure for the set of
+C<\@hints> are arrayref of hashrefs containing these members:
+
+=over 4
+
+=item * C<type> (scalar)
+
+The name of the type. "USE", "IGNORE or "FORCE".
+
+=item * C<list> (arrayref)
+
+The list of name of indexes which to use.
+
+=back
 
 =head2 C<$sql-E<gt>as_sql()>
 

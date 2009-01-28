@@ -1,4 +1,4 @@
-# $Id: 33-views.t 125 2006-05-04 00:10:20Z sky $
+# $Id: 33-views.t 537 2008-11-21 19:40:33Z swistow $
 
 use strict;
 
@@ -56,4 +56,4 @@ SKIP: {
     is $ingredients[0]->name, 'Vanilla Ice Cream';
 }
 
-teardown_dbs(qw( global ));
+sub DESTROY { teardown_dbs(qw( global )); }

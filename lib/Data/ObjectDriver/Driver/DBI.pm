@@ -1,4 +1,4 @@
-# $Id: DBI.pm 420 2007-11-30 00:56:58Z bchoate $
+# $Id: DBI.pm 559 2009-01-24 00:30:59Z ykerherve $
 
 package Data::ObjectDriver::Driver::DBI;
 use strict;
@@ -13,7 +13,8 @@ use Data::ObjectDriver::SQL;
 use Data::ObjectDriver::Driver::DBD;
 use Data::ObjectDriver::Iterator;
 
-__PACKAGE__->mk_accessors(qw( dsn username password connect_options dbh get_dbh dbd prefix ));
+__PACKAGE__->mk_accessors(qw( dsn username password connect_options dbh get_dbh dbd prefix reuse_dbh force_no_prepared_cache));
+
 
 sub init {
     my $driver = shift;
@@ -45,21 +46,45 @@ sub generate_pk {
     }
 }
 
+# Some versions of SQLite require the undefing to finalise properly
+sub _close_sth {
+    my $sth = shift;
+    $sth->finish;
+    undef $sth;
+}
+
+# Some versions of SQLite have problems with prepared caching due to finalisation order
+sub _prepare_cached {
+    my $driver = shift;
+    my $dbh    = shift;
+    my $sql    = shift;
+    return ($driver->dbd->can_prepare_cached_statements)? $dbh->prepare_cached($sql) : $dbh->prepare($sql);
+}
+
+my %Handles;
 sub init_db {
     my $driver = shift;
     my $dbh;
-    eval {
-        $dbh = DBI->connect($driver->dsn, $driver->username, $driver->password,
-            { RaiseError => 1, PrintError => 0, AutoCommit => 1,
-              %{$driver->connect_options || {}} })
-            or Carp::croak("Connection error: " . $DBI::errstr);
-    };
-    if ($@) {
-        Carp::croak($@);
+    if ($driver->reuse_dbh) {
+        $dbh = $Handles{$driver->dsn};
+    }
+    unless ($dbh) {
+        eval {
+            $dbh = DBI->connect($driver->dsn, $driver->username, $driver->password,
+                { RaiseError => 1, PrintError => 0, AutoCommit => 1,
+                %{$driver->connect_options || {}} })
+                or Carp::croak("Connection error: " . $DBI::errstr);
+        };
+        if ($@) {
+            Carp::croak($@);
+        }
+    }
+    if ($driver->reuse_dbh) {
+        $Handles{$driver->dsn} = $dbh;
     }
     $driver->dbd->init_dbh($dbh);
     $driver->{__dbh_init_by_driver} = 1;
-    $dbh;
+    return $dbh;
 }
 
 sub rw_handle {
@@ -88,21 +113,32 @@ sub fetch_data {
     my $rec = {};
     my $sth = $driver->fetch($rec, $obj, $terms, $args);
     $sth->fetch;
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
     return $rec;
+}
+
+sub prepare_fetch {
+    my $driver = shift;
+    my($class, $orig_terms, $orig_args) = @_;
+
+    ## Use (shallow) duplicates so the pre_search trigger can modify them.
+    my $terms = defined $orig_terms ? ( ref $orig_terms eq 'ARRAY' ? [ @$orig_terms ] : { %$orig_terms } ) : {};
+    my $args  = defined $orig_args  ? { %$orig_args  } : {};
+    $class->call_trigger('pre_search', $terms, $args);
+
+    my $stmt = $driver->prepare_statement($class, $terms, $args);
+
+    my $sql = $stmt->as_sql;
+    $sql .= "\nFOR UPDATE" if $orig_args->{for_update};
+    return ($sql, $stmt->{bind}, $stmt)
 }
 
 sub fetch {
     my $driver = shift;
     my($rec, $class, $orig_terms, $orig_args) = @_;
 
-    ## Use (shallow) duplicates so the pre_search trigger can modify them.
-    my $terms = defined $orig_terms ? ( ref $orig_terms eq 'ARRAY' ? [ @$orig_terms ] : { %$orig_terms } ) : undef;
-    my $args  = defined $orig_args  ? { %$orig_args  } : undef;
-    $class->call_trigger('pre_search', $terms, $args);
-
-    my $stmt = $driver->prepare_statement($class, $terms, $args);
+    my ($sql, $bind, $stmt) = $driver->prepare_fetch($class, $orig_terms, $orig_args);
 
     my @bind;
     my $map = $stmt->select_map;
@@ -110,17 +146,16 @@ sub fetch {
         push @bind, \$rec->{ $map->{$col} };
     }
 
-    my $sql = $stmt->as_sql;
-    $sql .= "\nFOR UPDATE" if $orig_args->{for_update};
     my $dbh = $driver->r_handle($class->properties->{db});
     $driver->start_query($sql, $stmt->{bind});
-    my $sth = $orig_args->{no_cached_prepare} ? $dbh->prepare($sql) : $dbh->prepare_cached($sql);
+
+    my $sth = $orig_args->{no_cached_prepare} ? $dbh->prepare($sql) : $driver->_prepare_cached($dbh, $sql);
     $sth->execute(@{ $stmt->{bind} });
     $sth->bind_columns(undef, @bind);
 
     # need to slurp 'offset' rows for DBs that cannot do it themselves
-    if (!$driver->dbd->offset_implemented && $args->{offset}) {
-        for (1..$args->{offset}) {
+    if (!$driver->dbd->offset_implemented && $orig_args->{offset}) {
+        for (1..$orig_args->{offset}) {
             $sth->fetch;
         }
     }
@@ -128,10 +163,23 @@ sub fetch {
     return $sth;
 }
 
+sub load_object_from_rec {
+    my $driver = shift;
+    my ($class, $rec, $no_triggers) = @_;
+
+    my $obj = $class->new;
+    $obj->set_values_internal($rec);
+    ## Don't need a duplicate as there's no previous version in memory
+    ## to preserve.
+    $obj->{__is_stored} = 1;
+    $obj->call_trigger('post_load') unless $no_triggers;
+    return $obj;
+}
+
 sub search {
     my($driver) = shift;
     my($class, $terms, $args) = @_;
-    
+
     my $rec = {};
     my $sth = $driver->fetch($rec, $class, $terms, $args);
 
@@ -142,21 +190,12 @@ sub search {
         my $d = $driver;
 
         unless ($sth->fetch) {
-            $sth->finish;
+            _close_sth($sth);
             $driver->end_query($sth);
             return;
         }
-        my $obj;
-        $obj = $class->new;
-        $obj->set_values_internal($rec);
-        ## Don't need a duplicate as there's no previous version in memory
-        ## to preserve.
-        $obj->call_trigger('post_load') unless $args->{no_triggers};
-        $obj;
+        return $driver->load_object_from_rec($class, $rec, $args->{no_triggers});
     };
-    my $iterator = Data::ObjectDriver::Iterator->new(
-        $iter, sub { $sth->finish; $driver->end_query($sth) },
-    );
 
     if (wantarray) {
         my @objs = ();
@@ -166,6 +205,9 @@ sub search {
         }
         return @objs;
     } else {
+        my $iterator = Data::ObjectDriver::Iterator->new(
+            $iter, sub { _close_sth($sth); $driver->end_query($sth) },
+        );
         return $iterator;
     }
     return;
@@ -186,7 +228,7 @@ sub lookup_multi {
     return [] unless @$ids;
     my @got;
     ## If it's a single-column PK, assume it's in one partition, and
-    ## use an OR search.
+    ## use an OR search. FIXME: can we instead check for partitioning?
     unless (ref($ids->[0])) {
         my $terms = $class->primary_key_to_terms([ $ids ]);
         my @sqlgot = $driver->search($class, $terms, { is_pk => 1 });
@@ -194,7 +236,7 @@ sub lookup_multi {
         @got = map { defined $_ ? $hgot{$_} : undef } @$ids;
     } else {
         for my $id (@$ids) {
-            push @got, $class->driver->lookup($class, $id);
+            push @got, eval{ $class->driver->lookup($class, $id) };
         }
     }
     \@got;
@@ -206,16 +248,16 @@ sub select_one {
     my $dbh = $driver->r_handle;
 
     $driver->start_query($sql, $bind);
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     $sth->execute(@$bind);
     $sth->bind_columns(undef, \my($val));
     unless ($sth->fetch) {
-        $sth->finish;
+        _close_sth($sth);
         $driver->end_query($sth);
         return;
     }
 
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
 
     return $val;
@@ -237,6 +279,7 @@ sub exists {
     my $terms = $obj->primary_key_to_terms;
 
     my $class = ref $obj;
+    $terms ||= {};
     $class->call_trigger('pre_search', $terms);
 
     my $tbl = $driver->table_for($obj);
@@ -245,10 +288,10 @@ sub exists {
     $sql .= $stmt->as_sql_where;
     my $dbh = $driver->r_handle($obj->properties->{db});
     $driver->start_query($sql, $stmt->{bind});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     $sth->execute(@{ $stmt->{bind} });
     my $exists = $sth->fetch;
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
 
     return $exists;
@@ -257,8 +300,9 @@ sub exists {
 sub replace {
     my $driver = shift;
     if ($driver->dbd->can_replace) {
-        $driver->_insert_or_replace(@_, { replace => 1 });
-    } else {
+        return $driver->_insert_or_replace(@_, { replace => 1 });
+    }
+    if (! $driver->txn_active) {
         $driver->begin_work;
         eval {
             $driver->remove(@_);
@@ -269,7 +313,10 @@ sub replace {
             Carp::croak("REPLACE transaction error $driver: $@");
         }
         $driver->commit;
+        return;
     }
+    $driver->remove(@_);
+    $driver->insert(@_);
 }
 
 sub insert {
@@ -285,7 +332,7 @@ sub _insert_or_replace {
     ## Syntax switch between INSERT or REPLACE statement based on options
     $options ||= {};
     my $INSERT_OR_REPLACE = $options->{replace} ? 'REPLACE' : 'INSERT';
-    
+
     ## Use a duplicate so the pre_save trigger can modify it.
     my $obj = $orig_obj->clone_all;
     $obj->call_trigger('pre_save', $orig_obj);
@@ -321,7 +368,7 @@ sub _insert_or_replace {
             'VALUES (' . join(', ', ('?') x @$cols) . ')' . "\n";
     my $dbh = $driver->rw_handle($obj->properties->{db});
     $driver->start_query($sql, $obj->{column_values});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     my $i = 1;
     my $col_defs = $obj->properties->{column_defs};
     for my $col (@$cols) {
@@ -330,8 +377,9 @@ sub _insert_or_replace {
         my $attr = $dbd->bind_param_attributes($type, $obj, $col);
         $sth->bind_param($i++, $val, $attr);
     }
-    $sth->execute;
-    $sth->finish;
+    eval { $sth->execute };
+	die "Failed to execute $sql with ".join(", ",@$cols).": $@" if $@;
+    _close_sth($sth);
     $driver->end_query($sth);
 
     ## Now, if we didn't have an object ID, we need to grab the
@@ -339,7 +387,7 @@ sub _insert_or_replace {
     if (!$obj->is_pkless && ! $obj->has_primary_key) {
         my $pk = $obj->primary_key_tuple; ## but do that only for relation that aren't PK-less
         my $id_col = $pk->[0]; # XXX are we sure we will always use '0' ?
-        my $id = $dbd->fetch_id(ref($obj), $dbh, $sth);
+        my $id = $dbd->fetch_id(ref($obj), $dbh, $sth, $driver);
         $obj->$id_col($id);
         ## The ID is the only thing we *are* allowed to change on
         ## the original object.
@@ -349,12 +397,14 @@ sub _insert_or_replace {
     $obj->call_trigger('post_save', $orig_obj);
     $obj->call_trigger('post_insert', $orig_obj);
 
+    $orig_obj->{__is_stored} = 1;
     $orig_obj->{changed_cols} = {};
     1;
 }
 
 sub update {
     my $driver = shift;
+
     my($orig_obj, $terms) = @_;
 
     ## Use a duplicate so the pre_save trigger can modify it.
@@ -387,7 +437,7 @@ sub update {
 
     my $dbh = $driver->rw_handle($obj->properties->{db});
     $driver->start_query($sql, $obj->{column_values});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     my $i = 1;
     my $col_defs = $obj->properties->{column_defs};
     for my $col (@changed_cols) {
@@ -403,7 +453,7 @@ sub update {
     }
 
     my $rows = $sth->execute;
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
 
     $obj->call_trigger('post_save', $orig_obj);
@@ -448,13 +498,14 @@ sub remove {
     $sql .= $stmt->as_sql_where;
     my $dbh = $driver->rw_handle($obj->properties->{db});
     $driver->start_query($sql, $stmt->{bind});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     my $result = $sth->execute(@{ $stmt->{bind} });
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
 
     $obj->call_trigger('post_remove', $orig_obj);
 
+    $orig_obj->{__is_stored} = 1;
     return $result;
 }
 
@@ -482,9 +533,9 @@ sub direct_remove {
 
     my $dbh = $driver->rw_handle($class->properties->{db});
     $driver->start_query($sql, $stmt->{bind});
-    my $sth = $dbh->prepare_cached($sql);
+    my $sth = $driver->_prepare_cached($dbh, $sql);
     my $result = $sth->execute(@{ $stmt->{bind} });
-    $sth->finish;
+    _close_sth($sth);
     $driver->end_query($sth);
     return $result;
 }
@@ -523,19 +574,29 @@ sub bulk_insert {
 
 sub begin_work {
     my $driver = shift;
+
+    return if $driver->txn_active;
+
     my $dbh = $driver->dbh;
+
     unless ($dbh) {
         $driver->{__delete_dbh_after_txn} = 1;
         $dbh = $driver->rw_handle;
         $driver->dbh($dbh);
     }
-    eval {
-        $dbh->begin_work;
-    };
-    if ($@) {
-        $driver->rollback;
-        Carp::croak("Begin work failed for driver $driver: $@");
+
+    if ($dbh->{AutoCommit}) {
+        eval {
+            $dbh->begin_work;
+        };
+        if (my $err = $@) {
+            $driver->rollback;
+            Carp::croak("Begin work failed for driver $driver: $err");
+        }
     }
+    ## if for some reason AutoCommit was 0 but txn_active was false,
+    ## then we set it to true now
+    $driver->txn_active(1);
 }
 
 sub commit { shift->_end_txn('commit') }
@@ -544,11 +605,21 @@ sub rollback { shift->_end_txn('rollback') }
 sub _end_txn {
     my $driver = shift;
     my($action) = @_;
-    my $dbh = $driver->dbh
-        or Carp::croak("$action called without a stored handle--begin_work?");
-    eval { $dbh->$action() };
-    if ($@) {
-        Carp::croak("$action failed for driver $driver: $@");
+
+    ## if the driver has its own internal txn_active flag
+    ## off, we don't bother ending. Maybe we already did
+    if ($driver->txn_active) {
+        $driver->txn_active(0);
+
+        my $dbh = $driver->dbh
+            or Carp::croak("$action called without a stored handle--begin_work?");
+
+        unless ($dbh->{AutoCommit}) {
+            eval { $dbh->$action() };
+            if ($@) {
+                Carp::croak("$action failed for driver $driver: $@");
+            }
+        }
     }
     if ($driver->{__delete_dbh_after_txn}) {
         $driver->dbh(undef);
@@ -629,8 +700,9 @@ sub prepare_statement {
             $stmt->order(\@order);
         }
     }
-    $stmt->limit($args->{limit}) if $args->{limit};
-    $stmt->offset($args->{offset}) if $args->{offset};
+    $stmt->limit( $args->{limit} )     if $args->{limit};
+    $stmt->offset( $args->{offset} )   if $args->{offset};
+    $stmt->comment( $args->{comment} ) if $args->{comment};
 
     if (my $terms = $args->{having}) {
         for my $col (keys %$terms) {

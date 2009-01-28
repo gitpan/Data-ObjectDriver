@@ -1,4 +1,4 @@
-# $Id: DBD.pm 333 2007-02-13 00:48:19Z miyagawa $
+# $Id: DBD.pm 558 2009-01-22 21:20:09Z miyagawa $
 
 package Data::ObjectDriver::Driver::DBD;
 use strict;
@@ -10,7 +10,8 @@ sub new {
     my($name) = @_;
     die "No Driver" unless $name;
     my $subclass = join '::', $class, $name;
-    unless (defined ${"${subclass}::"}) {
+    no strict 'refs';
+    unless (defined %{"${subclass}::"}) {
         eval "use $subclass"; ## no critic
         die $@ if $@;
     }
@@ -38,7 +39,11 @@ sub is_case_insensitive { 0 }
 
 sub can_replace { 0 }
 
+# Some drivers have problems with prepared caches
+sub can_prepare_cached_statements { 1 };
+
 sub sql_class { 'Data::ObjectDriver::SQL' }
+
 
 1;
 
@@ -149,6 +154,12 @@ on C<DELETE> statements.
 
 By default, C<can_delete_with_limit> returns false.
 
+=head2 C<$dbd-E<gt>can_prepare_cached_statements()>
+
+Returns true if the database this driver can cope with preparing a cached statement.
+
+By default, C<can_delete_with_limit> returns true.
+
 =head2 C<$dbd-E<gt>is_case_insensitive()>
 
 Returns true if the database this driver represents normally compares string
@@ -158,8 +169,17 @@ By default, C<is_case_insensitive> returns false.
 
 =head2 C<$dbd-E<gt>can_replace()>
 
-Returns true or false if the driver can do "REPLACE INTO" only Mysql and
-SQLite does. By default returns false.
+Returns true if the database this driver represents supports C<REPLACE INTO>
+statements.
+
+By default, C<can_replace> returns false.
+
+=head2 C<$dbd-E<gt>force_no_prepared_cache()>
+
+Returns false if the database this driver represents supports the
+C<prepare_cached> method on its DBI database handles.
+
+By default, C<force_no_prepared_cache> returns false.
 
 =head2 C<$dbd-E<gt>sql_class()>
 
