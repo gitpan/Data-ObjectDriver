@@ -1,4 +1,4 @@
-# $Id: db-common.pl 58 2006-05-04 00:04:10Z sky $
+# $Id$
 
 use strict;
 use File::Spec;

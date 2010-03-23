@@ -1,4 +1,4 @@
-# $Id: IngredientsWeighted.pm 125 2006-05-04 00:10:20Z sky $
+# $Id$
 
 package IngredientsWeighted;
 use strict;

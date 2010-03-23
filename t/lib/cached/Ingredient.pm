@@ -1,4 +1,4 @@
-# $Id: Ingredient.pm 506 2008-06-30 17:52:14Z ykerherve $
+# $Id$
 
 package Ingredient;
 use strict;

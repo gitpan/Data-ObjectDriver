@@ -1,4 +1,4 @@
-# $Id: ErrorTest.pm 210 2006-05-23 18:58:57Z btrott $
+# $Id$
 
 package ErrorTest;
 use strict;

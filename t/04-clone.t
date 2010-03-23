@@ -1,4 +1,4 @@
-# $Id: 04-clone.t 537 2008-11-21 19:40:33Z swistow $
+# $Id$
 
 use strict;
 

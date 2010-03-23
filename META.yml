@@ -1,27 +1,35 @@
---- 
-abstract: ''
-author: 
-  - Six Apart <cpan@sixapart.com>
-build_requires: 
+---
+abstract: 'Simple, transparent data interface, with caching'
+author:
+  - 'Six Apart <cpan@sixapart.com>'
+build_requires:
+  ExtUtils::MakeMaker: 6.42
   Test::Exception: 0
+configure_requires:
+  ExtUtils::MakeMaker: 6.42
 distribution_type: module
-generated_by: Module::Install version 0.68
+generated_by: 'Module::Install version 0.95'
 license: perl
-meta-spec: 
-  url: http://module-build.sourceforge.net/META-spec-v1.3.html
-  version: 1.3
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
 name: Data-ObjectDriver
-no_index: 
-  directory: 
-    - t
+no_index:
+  directory:
     - inc
     - t
-recommends: 
+    - xt
+recommends:
   Text::SimpleTable: 0
-requires: 
+requires:
   Class::Accessor::Fast: 0
   Class::Data::Inheritable: 0
   Class::Trigger: 0
   DBI: 0
   List::Util: 0
-version: 0.06
+  perl: 5.6.1
+resources:
+  homepage: http://github.com/yannk/data-objectdriver/tree
+  license: http://dev.perl.org/licenses/
+  repository: git://github.com/yannk/data-objectdriver.git
+version: 0.07

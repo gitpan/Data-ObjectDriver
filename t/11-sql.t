@@ -1,4 +1,4 @@
-# $Id: 11-sql.t 518 2008-08-27 05:41:23Z miyagawa $
+# $Id$
 
 use strict;
 

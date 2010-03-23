@@ -1,4 +1,4 @@
-# $Id: Wine.pm 344 2007-04-03 00:59:13Z ykerherve $
+# $Id$
 
 use strict;
 
