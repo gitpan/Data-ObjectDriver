@@ -4,11 +4,10 @@ author:
   - 'Six Apart <cpan@sixapart.com>'
 build_requires:
   ExtUtils::MakeMaker: 6.42
-  Test::Exception: 0
 configure_requires:
   ExtUtils::MakeMaker: 6.42
 distribution_type: module
-generated_by: 'Module::Install version 0.95'
+generated_by: 'Module::Install version 1.00'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -32,4 +31,4 @@ resources:
   homepage: http://github.com/yannk/data-objectdriver/tree
   license: http://dev.perl.org/licenses/
   repository: git://github.com/yannk/data-objectdriver.git
-version: 0.07
+version: 0.08

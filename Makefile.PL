@@ -9,6 +9,8 @@ all_from('lib/Data/ObjectDriver.pm');
 license('perl');
 no_index(directory => 't');
 
+include('ExtUtils::AutoInstall');
+
 requires('DBI');
 requires('Class::Accessor::Fast');
 requires('Class::Data::Inheritable');

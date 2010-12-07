@@ -18,7 +18,7 @@ BEGIN {
     }
 }
 
-plan tests => 18;
+plan tests => 22;
 
 use Recipe;
 use Ingredient;
@@ -34,6 +34,19 @@ $Data::ObjectDriver::PROFILE = 1;
 my $recipe = Recipe->new;
 $recipe->title('Cake');
 $recipe->save;
+
+## test profiling in exception handling blocks: i.e w/ $@ defined
+## see https://github.com/aklaswad/data-objectdriver/commit/39ea4f0c90342f1d196670aac2bc04b9d60acfe3
+{
+    ## Can get instance of D::OD::Profiler via profiler()
+    ok( my $profiler = Data::ObjectDriver->profiler );
+
+    ## But when some error was already set to $@, Can't get instance...
+    $@ = "beep";
+    ok( my $one_more_profiler = Data::ObjectDriver->profiler,
+        "get profiler after exception",
+    );
+}
 
 ## disable caching because it makes the test more complicate
 ## to understand. Indeed inflate and deflate generates additional
@@ -84,6 +97,24 @@ $frequent = $profiler->query_frequency;
 is $frequent->{"SELECT 1 FROM recipes WHERE (recipes.recipe_id = ?)"}, 2;
 
 is $profiler->total_queries, 5;
+
+# testing $Data::ObjectDriver::RESTRICT_IO
+
+$recipe = Recipe->new;
+$recipe->title('Cookies');
+$recipe->save;
+# this didn't die, great!
+
+{
+        local $Data::ObjectDriver::RESTRICT_IO = 1;
+        dies_ok { 
+                $recipe = Recipe->lookup($recipe->recipe_id);
+        } 'I/O attempt intercepted in restricted mode';
+}
+
+lives_ok { 
+        $recipe = Recipe->lookup($recipe->recipe_id);
+} 'I/O succeeded with restriced mode disabled';
 
 SKIP: {
         my $simpletable = eval { require Text::SimpleTable };
