@@ -31,4 +31,4 @@ resources:
   homepage: http://github.com/yannk/data-objectdriver/tree
   license: http://dev.perl.org/licenses/
   repository: git://github.com/yannk/data-objectdriver.git
-version: 0.08
+version: 0.09
